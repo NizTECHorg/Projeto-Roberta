@@ -107,7 +107,7 @@ Plan 15-02 pins `emailRedirectTo` to `https://fluxofisio.vercel.app/auth/confirm
 1. Open **Vercel → Project → Settings → Environment Variables**.
 2. Delete `VITE_APP_URL` unless its value is exactly `https://fluxofisio.vercel.app`.
 3. Redeploy so the build that sends `emailRedirectTo` includes the plan 15-02 fix.
-4. Leave `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` untouched.
+4. Leave `SUPABASE_URL` and `SUPABASE_ANON_KEY` untouched.
 5. No SMTP variable belongs in Vercel. SMTP credentials stay only in the Supabase Dashboard (section 6).
 
 ---

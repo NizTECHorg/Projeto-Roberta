@@ -1,5 +1,5 @@
-const SUPABASE_URL = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim()
-const SUPABASE_ANON_KEY = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
+const SUPABASE_URL = String(import.meta.env.SUPABASE_URL ?? '').trim()
+const SUPABASE_ANON_KEY = String(import.meta.env.SUPABASE_ANON_KEY ?? '').trim()
 
 /** The only origin allowed in emailRedirectTo. localhost / 127.0.0.1 overrides are rejected on purpose. */
 const PRODUCTION_APP_URL = 'https://fluxofisio.vercel.app'

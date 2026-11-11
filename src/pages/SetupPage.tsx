@@ -21,8 +21,8 @@ export function SetupPage() {
               1. Na Vercel, vá em <code className="text-forest">Settings → Environment Variables</code>
             </li>
             <li>
-              2. Confirme <code className="text-forest">VITE_SUPABASE_URL</code> e{' '}
-              <code className="text-forest">VITE_SUPABASE_ANON_KEY</code> (Production)
+              2. Confirme <code className="text-forest">SUPABASE_URL</code> e{' '}
+              <code className="text-forest">SUPABASE_ANON_KEY</code> (Production)
             </li>
             <li>
               3. Vá em <code className="text-forest">Deployments</code> → abra o último deploy →{' '}
@@ -40,8 +40,8 @@ export function SetupPage() {
               <code className="text-forest">.env</code>
             </li>
             <li>
-              2. Preencha <code className="text-forest">VITE_SUPABASE_URL</code> e{' '}
-              <code className="text-forest">VITE_SUPABASE_ANON_KEY</code>
+              2. Preencha <code className="text-forest">SUPABASE_URL</code> e{' '}
+              <code className="text-forest">SUPABASE_ANON_KEY</code>
             </li>
             <li>
               3. Execute as migrations em <code className="text-forest">supabase/migrations/</code>

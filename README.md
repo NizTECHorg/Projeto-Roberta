@@ -41,12 +41,12 @@ Variáveis de ambiente
 Crie um arquivo `.env.local` (ou configure o provedor de hospedagem) com as chaves abaixo:
 
 ```
-VITE_SUPABASE_URL=https://SEU_PROJETO.supabase.co
-VITE_SUPABASE_ANON_KEY=sua-chave-anonima
+SUPABASE_URL=https://SEU_PROJETO.supabase.co
+SUPABASE_ANON_KEY=sua-chave-anonima
 ```
 
 Observações:
-- `src/config/env.ts` valida que `VITE_SUPABASE_URL` é um `https:` e que as chaves não estão com placeholders.
+- `src/config/env.ts` valida que `SUPABASE_URL` é um `https:` e que as chaves não estão com placeholders.
 - O cliente Supabase lança erro se a configuração não estiver válida (`Supabase não configurado`).
 
 Scripts (do `package.json`)
@@ -73,7 +73,7 @@ cd ProjetoFisio
 npm install
 
 # configurar variáveis de ambiente
-# crie .env.local com VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY
+# crie .env.local com SUPABASE_URL e SUPABASE_ANON_KEY
 
 # rodar em desenvolvimento
 npm run dev

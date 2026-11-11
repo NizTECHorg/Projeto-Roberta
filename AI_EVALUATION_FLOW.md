@@ -20,7 +20,7 @@ sequenceDiagram
     UI->>AIService: Envia o arquivo File (PDF)
     AIService->>AIService: Converte PDF para string Base64
     
-    alt Chave VITE_GEMINI_API_KEY Configurada
+    alt Chave GEMINI_API_KEY Configurada
         AIService->>Gemini: POST /v1beta/models/gemini-2.0-flash:generateContent (Base64 + Prompt)
         Gemini-->>AIService: Retorna JSON estruturado com laudo fisioterapêutico
     else Modo Dev sem Chave / Erro
@@ -116,7 +116,7 @@ Para usar a API real do Google Gemini em produção ou dev:
 
 No arquivo `.env`:
 ```env
-VITE_GEMINI_API_KEY=sua_chave_do_google_ai_studio
+GEMINI_API_KEY=sua_chave_do_google_ai_studio
 ```
 
-*Nota: Se a variável `VITE_GEMINI_API_KEY` não for informada, o sistema ativa automaticamente um gerador gracioso de simulação para permitir testes sem depender da chave.*
+*Nota: Se a variável `GEMINI_API_KEY` não for informada, o sistema ativa automaticamente um gerador gracioso de simulação para permitir testes sem depender da chave.*
