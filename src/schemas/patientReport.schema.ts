@@ -1,0 +1,80 @@
+import { z } from 'zod'
+import { RELATORIO_CONTEUDO_MAX_CHARS, RELATORIO_MAX_SESSOES } from '@/lib/relatorio'
+import { SIGNATURE_MAX_CHARS } from '@/lib/signaturePath'
+
+const sessionIdsSchema = z.array(z.string().uuid()).min(1).max(RELATORIO_MAX_SESSOES)
+
+/** Body da IA no modo relatorio. Sem userHint. */
+export const patientReportInvokeSchema = z.object({
+  patientId: z.string().uuid(),
+  sessionIds: sessionIdsSchema,
+})
+
+export const patientReportTextSchema = z.object({
+  texto: z.string().trim().min(1),
+})
+
+const contentSchema = z.string().trim().min(1).max(RELATORIO_CONTEUDO_MAX_CHARS)
+const placeSchema = z.string().trim().max(120).nullable()
+const signatureSchema = z.string().max(SIGNATURE_MAX_CHARS).nullable()
+
+export const patientReportCreateSchema = z.object({
+  patientId: z.string().uuid(),
+  // Vazio quando o relatório é feito pelo modelo, sem sessões marcadas.
+  sessionIds: z.array(z.string().uuid()).max(RELATORIO_MAX_SESSOES),
+  content: contentSchema,
+  place: placeSchema,
+  sessionLabel: z.string().trim().max(120),
+  therapistName: z.string().trim().max(120).nullable(),
+  therapistCrefito: z.string().trim().max(40).nullable(),
+  signaturePath: signatureSchema,
+})
+
+export const patientReportUpdateSchema = z.object({
+  content: contentSchema,
+  signaturePath: signatureSchema,
+  place: placeSchema,
+})
+
+export type PatientReportInvokeInput = z.infer<typeof patientReportInvokeSchema>
+export type PatientReportCreateInput = z.infer<typeof patientReportCreateSchema>
+export type PatientReportUpdateInput = z.infer<typeof patientReportUpdateSchema>
+
+export const PATIENT_REPORT_COPY = {
+  tabHelp: 'Marque sessões para a IA resumir ou preencha o modelo, revise e salve.',
+  newReport: 'Novo relatório',
+  empty: 'Nenhum relatório salvo ainda.',
+  listError: 'Não foi possível carregar os relatórios.',
+  noSessions:
+    'Nenhuma sessão com evolução escrita. Registre a evolução na aba Sessões / Evoluções.',
+  selectHint: 'Selecione de 1 a 12 sessões.',
+  maxSessions: 'Selecione no máximo 12 sessões.',
+  noEvolution: 'Sem evolução escrita',
+  draftBadge: 'Rascunho',
+  draftHint: 'Evolução ainda não finalizada',
+  generate: 'Gerar relatório',
+  reviewNotice: 'Revise o texto antes de salvar. A IA usa só as sessões marcadas.',
+  overLimit: 'O relatório passa de 15 linhas. Reduza o texto.',
+  reduced: 'Texto reduzido para caber em 15 linhas.',
+  confirmNumbers: 'Confira estes números no texto:',
+  placeLabel: 'Local',
+  save: 'Salvar relatório',
+  saved: 'Relatório salvo.',
+  updated: 'Relatório atualizado.',
+  deleted: 'Relatório excluído.',
+  deleteTitle: 'Excluir relatório?',
+  deleteDescription: 'O relatório e o PDF dele serão apagados.',
+  draftRestored: 'Recuperamos o que você não tinha salvo.',
+  draftNew: 'Você tem um relatório não salvo.',
+  signatureLabel: 'Assinatura (opcional)',
+  modeModel: 'Modelo',
+  modeSessions: 'Sessões específicas',
+  modelHint: 'Troque o que está entre parênteses pelos dados do paciente.',
+  tooLong: 'O relatório passa de 3000 caracteres. Reduza o texto.',
+  outdatedFunction:
+    'A função de IA está desatualizada. Publique de novo a função patient-ai-summary no Supabase.',
+  noContent: 'Uma das sessões marcadas não tem evolução escrita.',
+  saveError: 'Não foi possível salvar o relatório.',
+  pdfStale: 'Este relatório mudou em outra tela. Recarregue a página e tente de novo.',
+  whatsappMessage: 'Segue o relatório.',
+} as const

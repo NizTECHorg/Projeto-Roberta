@@ -1,0 +1,2626 @@
+import { Activity, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, Hand, Plus, X, type LucideIcon } from 'lucide-react'
+import { useId, useRef, useState, type ReactNode } from 'react'
+import {
+  Controller,
+  useFieldArray,
+  useWatch,
+  type Control,
+  type UseFormRegister,
+  type UseFormSetValue,
+  type UseFormWatch,
+} from 'react-hook-form'
+import { Button } from '@/components/ui/Button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { Input } from '@/components/ui/Input'
+import {
+  CATALOGO_MOBILIDADE,
+  CATALOGO_PALPACAO,
+  CATALOGO_TESTES,
+  fold,
+  type AchadoPalpacao,
+  type LadoAchado,
+  tiposValidos,
+} from '@/lib/mobilidadePalpacao'
+import type { EvaluationFormData } from '@/schemas/evaluation.schema'
+import { scrollToElement } from '@/lib/scrollToElement'
+import { FORCA_REGIOES, agruparForca, sugestoesForca } from '@/lib/forcaRegioes'
+import {
+  ACHADOS_FUNCIONAIS,
+  CATALOGO_FUNCIONAIS,
+  LADOS_FUNCIONAIS,
+  QUALIDADES_FUNCIONAIS,
+  UNIDADES_FUNCIONAIS,
+  assimetriaFuncional,
+  rotuloTesteFuncional,
+  testeFuncional,
+  type AchadoFuncional,
+} from '@/lib/testesFuncionais'
+import { SignaturePad } from '@/components/patients/evaluation/SignaturePad'
+import {
+  BoolCheck,
+  CheckboxGrid,
+  FichaBlock,
+  LineField,
+  RadioRow,
+  TextField,
+} from '@/components/patients/evaluation/fichaFormPrimitives'
+
+type PageProps = {
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  setValue: UseFormSetValue<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  readOnly?: boolean
+}
+
+const CAMPO =
+  'min-h-11 w-full rounded-2xl border border-line bg-surface px-4 py-2 text-base font-normal leading-normal text-ink'
+const ROTULO = 'block text-sm font-semibold leading-[1.2] text-ink'
+const CHIP =
+  'inline-flex min-h-11 items-center rounded-2xl border px-4 text-sm font-semibold leading-[1.2] disabled:opacity-100'
+const CHIP_ATIVO = 'border-forest bg-forest text-white'
+const CHIP_INATIVO = 'border-line bg-surface text-ink'
+const VALORES_MOVIMENTO = ['Completo', 'Limitado', 'Não avaliado'] as const
+
+function vazioViraUndefined(value: unknown) {
+  if (value === '' || value === null || value === undefined) return undefined
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+function ladoTemDor(dor: unknown) {
+  if (!dor || typeof dor !== 'object') return false
+  const lado = dor as { inicio?: unknown; maxima?: unknown; observacao?: unknown }
+  if (typeof lado.inicio === 'string' && lado.inicio.trim()) return true
+  if (typeof lado.maxima === 'number' && Number.isFinite(lado.maxima)) return true
+  if (typeof lado.observacao === 'string' && lado.observacao.trim()) return true
+  return false
+}
+
+function LadoMedida({
+  regiaoIndex,
+  movIndex,
+  movimento,
+  lado,
+  register,
+  watch,
+  setValue,
+  disabled,
+}: {
+  regiaoIndex: number
+  movIndex: number
+  movimento: string
+  lado: 'direito' | 'esquerdo'
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  setValue: UseFormSetValue<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const idValor = useId()
+  const idInicio = useId()
+  const idMaxima = useId()
+  const idObsDor = useId()
+  const [aberto, setAberto] = useState(false)
+  const direito = lado === 'direito'
+  const letra = direito ? 'D' : 'E'
+  const frase = direito ? 'direito' : 'esquerdo'
+  const valorNome = direito
+    ? (`ficha.avaliacaoPlano.mobilidade.regioes.${regiaoIndex}.movimentos.${movIndex}.valorDireito` as const)
+    : (`ficha.avaliacaoPlano.mobilidade.regioes.${regiaoIndex}.movimentos.${movIndex}.valorEsquerdo` as const)
+  const dorNome = direito
+    ? (`ficha.avaliacaoPlano.mobilidade.regioes.${regiaoIndex}.movimentos.${movIndex}.dorDireito` as const)
+    : (`ficha.avaliacaoPlano.mobilidade.regioes.${regiaoIndex}.movimentos.${movIndex}.dorEsquerdo` as const)
+  const valorAtual = watch(valorNome)
+  const texto = typeof valorAtual === 'string' ? valorAtual : ''
+  const temDor = ladoTemDor(watch(dorNome))
+  const painelAberto = disabled ? temDor : aberto
+  const destaque = aberto || temDor
+
+  return (
+    <div className="space-y-2">
+      <label htmlFor={idValor} className={ROTULO}>
+        {letra}
+      </label>
+      <input
+        id={idValor}
+        type="text"
+        className={CAMPO}
+        aria-label={`Valor ${frase} de ${movimento}`}
+        disabled={disabled}
+        {...register(valorNome)}
+      />
+      <div className="flex flex-wrap gap-2">
+        {VALORES_MOVIMENTO.map((chip) => {
+          const ativo = texto === chip
+          return (
+            <button
+              key={chip}
+              type="button"
+              disabled={disabled}
+              className={`${CHIP} ${ativo ? CHIP_ATIVO : CHIP_INATIVO}`}
+              onClick={() =>
+                setValue(valorNome, ativo ? '' : chip, { shouldDirty: true, shouldValidate: true })
+              }
+            >
+              {chip}
+            </button>
+          )
+        })}
+      </div>
+      {!disabled || temDor ? (
+        <button
+          type="button"
+          disabled={disabled}
+          aria-label={`Dor no lado ${frase} de ${movimento}`}
+          className={`inline-flex min-h-11 items-center rounded-2xl border px-4 text-sm font-semibold disabled:opacity-100 ${destaque ? CHIP_ATIVO : CHIP_INATIVO}`}
+          onClick={() => setAberto((atual) => !atual)}
+        >
+          Dor
+        </button>
+      ) : null}
+      {painelAberto ? (
+        <fieldset className="mt-2 space-y-2 rounded-2xl border border-line bg-surface p-4">
+          <legend className="text-sm font-semibold leading-[1.2] text-ink">
+            {`Dor na ${movimento} — lado ${frase}`}
+          </legend>
+          <div className="space-y-2">
+            <label htmlFor={idInicio} className={ROTULO}>
+              Início da dor
+            </label>
+            <input
+              id={idInicio}
+              type="text"
+              className={CAMPO}
+              disabled={disabled}
+              {...register(`${dorNome}.inicio`)}
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor={idMaxima} className={ROTULO}>
+              Dor máxima (/10)
+            </label>
+            <input
+              id={idMaxima}
+              type="number"
+              min={0}
+              max={10}
+              step={1}
+              className={CAMPO}
+              disabled={disabled}
+              {...register(`${dorNome}.maxima`, { setValueAs: vazioViraUndefined })}
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor={idObsDor} className={ROTULO}>
+              Observação
+            </label>
+            <input
+              id={idObsDor}
+              type="text"
+              className={CAMPO}
+              aria-label={`Observação da dor no lado ${frase} de ${movimento}`}
+              disabled={disabled}
+              {...register(`${dorNome}.observacao`)}
+            />
+          </div>
+        </fieldset>
+      ) : null}
+    </div>
+  )
+}
+
+function LinhaMedida({
+  regiaoIndex,
+  movIndex,
+  movimento,
+  register,
+  watch,
+  setValue,
+  disabled,
+}: {
+  regiaoIndex: number
+  movIndex: number
+  movimento: string
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  setValue: UseFormSetValue<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const idObs = useId()
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <LadoMedida
+          regiaoIndex={regiaoIndex}
+          movIndex={movIndex}
+          movimento={movimento}
+          lado="direito"
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          disabled={disabled}
+        />
+        <LadoMedida
+          regiaoIndex={regiaoIndex}
+          movIndex={movIndex}
+          movimento={movimento}
+          lado="esquerdo"
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          disabled={disabled}
+        />
+      </div>
+      <div className="space-y-2">
+        <label htmlFor={idObs} className={ROTULO}>
+          Observação
+        </label>
+        <input
+          id={idObs}
+          type="text"
+          className={CAMPO}
+          aria-label={`Observação de ${movimento}`}
+          disabled={disabled}
+          {...register(
+            `ficha.avaliacaoPlano.mobilidade.regioes.${regiaoIndex}.movimentos.${movIndex}.observacao`,
+          )}
+        />
+      </div>
+    </div>
+  )
+}
+
+function CartaoRegiao({
+  index,
+  escolhidas,
+  podeAcrescentar,
+  register,
+  watch,
+  setValue,
+  control,
+  disabled,
+  onAdd,
+  onAskRemove,
+}: {
+  index: number
+  escolhidas: ReadonlySet<string>
+  podeAcrescentar: boolean
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  setValue: UseFormSetValue<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+  onAdd: () => void
+  onAskRemove: () => void
+}) {
+  const idRegiao = useId()
+  const regiaoRegistro = register(`ficha.avaliacaoPlano.mobilidade.regioes.${index}.regiao`)
+  const regiaoBruta = watch(`ficha.avaliacaoPlano.mobilidade.regioes.${index}.regiao`)
+  const regiaoKey = typeof regiaoBruta === 'string' ? regiaoBruta : ''
+  const catalogo = CATALOGO_MOBILIDADE.find((item) => item.key === regiaoKey)
+  const { fields, append, remove, replace } = useFieldArray({
+    control,
+    name: `ficha.avaliacaoPlano.mobilidade.regioes.${index}.movimentos`,
+  })
+  const opcoes = CATALOGO_MOBILIDADE.filter(
+    (item) => item.key === regiaoKey || !escolhidas.has(item.key),
+  )
+  // Movimentos marcados que o usuário recolheu (só visual; os valores ficam na ficha).
+  const [recolhidos, setRecolhidos] = useState<ReadonlySet<string>>(() => new Set())
+
+  function alternarRecolhido(key: string) {
+    setRecolhidos((atual) => {
+      const proximo = new Set(atual)
+      if (proximo.has(key)) proximo.delete(key)
+      else proximo.add(key)
+      return proximo
+    })
+  }
+
+  return (
+    <div className="relative space-y-4 rounded-2xl border border-line bg-canvas p-4">
+      {!disabled ? (
+        <button
+          type="button"
+          aria-label="Remover região"
+          title="Remover região"
+          onClick={onAskRemove}
+          className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-error/10 hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/30"
+        >
+          <X size={18} aria-hidden />
+        </button>
+      ) : null}
+      <div className="flex flex-col gap-3 pr-10 sm:flex-row sm:items-end">
+        <div className="min-w-0 flex-1 space-y-2">
+          <label htmlFor={idRegiao} className={ROTULO}>
+            Região
+          </label>
+          <select
+            id={idRegiao}
+            className={CAMPO}
+            disabled={disabled}
+            {...regiaoRegistro}
+            onChange={(event) => {
+              regiaoRegistro.onChange(event)
+              replace([])
+            }}
+          >
+            <option value="">Escolha a região</option>
+            {opcoes.map((item) => (
+              <option key={item.key} value={item.key}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {podeAcrescentar ? (
+          <Button type="button" variant="secondary" onClick={onAdd}>
+            Adicionar outra região
+          </Button>
+        ) : null}
+      </div>
+      {catalogo ? (
+        <>
+          <RadioRow
+            legend="Tipo de avaliação"
+            name={`ficha.avaliacaoPlano.mobilidade.regioes.${index}.tipo`}
+            register={register}
+            disabled={disabled}
+            options={[
+              { value: 'ativo', label: 'Ativo' },
+              { value: 'passivo', label: 'Passivo' },
+              { value: 'ambos', label: 'Ambos' },
+            ]}
+          />
+          <RadioRow
+            legend="Comparação"
+            name={`ficha.avaliacaoPlano.mobilidade.regioes.${index}.comparacao`}
+            register={register}
+            disabled={disabled}
+            options={[
+              { value: 'bilateral', label: 'Bilateral' },
+              { value: 'unilateral', label: 'Unilateral' },
+            ]}
+          />
+          <div className="space-y-2">
+            {catalogo.movimentos.map((item) => {
+              const movIndex = fields.findIndex((campo) => campo.movimento === item.key)
+              const marcado = movIndex >= 0
+              const aberto = marcado && !recolhidos.has(item.key)
+              const painelId = `mov-${index}-${item.key}`
+              return (
+                <div key={item.key} className="space-y-2">
+                  <div className="flex items-center gap-1">
+                    <label className="inline-flex min-h-11 items-center gap-2 text-sm text-ink">
+                      <input
+                        type="checkbox"
+                        className="accent-forest"
+                        checked={marcado}
+                        disabled={disabled}
+                        onChange={() => {
+                          if (marcado) remove(movIndex)
+                          else {
+                            append({ movimento: item.key }, { shouldFocus: false })
+                            setRecolhidos((atual) => {
+                              if (!atual.has(item.key)) return atual
+                              const proximo = new Set(atual)
+                              proximo.delete(item.key)
+                              return proximo
+                            })
+                          }
+                        }}
+                      />
+                      <span>{item.label}</span>
+                    </label>
+                    {marcado ? (
+                      <button
+                        type="button"
+                        aria-expanded={aberto}
+                        aria-controls={painelId}
+                        aria-label={aberto ? `Recolher ${item.label}` : `Mostrar ${item.label}`}
+                        title={aberto ? 'Recolher' : 'Mostrar'}
+                        onClick={() => alternarRecolhido(item.key)}
+                        className="flex h-9 w-9 items-center justify-center rounded-full text-forest transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+                      >
+                        <ChevronDown
+                          size={18}
+                          aria-hidden
+                          className={[
+                            'transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                            aberto ? 'rotate-0' : '-rotate-90',
+                          ].join(' ')}
+                        />
+                      </button>
+                    ) : null}
+                  </div>
+                  {marcado ? (
+                    <div
+                      id={painelId}
+                      inert={aberto ? undefined : true}
+                      className={[
+                        'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                        aberto ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+                      ].join(' ')}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <LinhaMedida
+                          regiaoIndex={index}
+                          movIndex={movIndex}
+                          movimento={item.label}
+                          register={register}
+                          watch={watch}
+                          setValue={setValue}
+                          disabled={disabled}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function MobilidadeRegioes({
+  register,
+  watch,
+  setValue,
+  control,
+  disabled,
+}: {
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  setValue: UseFormSetValue<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'ficha.avaliacaoPlano.mobilidade.regioes',
+  })
+  const [pendente, setPendente] = useState<number | null>(null)
+  const [ativaBruta, setAtivaBruta] = useState(0)
+  const topoRef = useRef<HTMLDivElement>(null)
+  const regioes = watch('ficha.avaliacaoPlano.mobilidade.regioes')
+  const lista = Array.isArray(regioes) ? regioes : []
+  const escolhidas = new Set(
+    lista
+      .map((item) => (typeof item?.regiao === 'string' ? item.regiao : ''))
+      .filter((key) => key.length > 0),
+  )
+  const podeAcrescentar = !disabled && escolhidas.size < CATALOGO_MOBILIDADE.length
+  const registro = watch('ficha.avaliacaoPlano.mobilidade.registroAnterior')
+  const registroAnterior = typeof registro === 'string' ? registro : ''
+  const ativa = fields.length === 0 ? -1 : Math.min(Math.max(ativaBruta, 0), fields.length - 1)
+
+  function rotuloRegiao(index: number) {
+    const chave = lista[index]?.regiao
+    const item = CATALOGO_MOBILIDADE.find((entrada) => entrada.key === chave)
+    return item?.label ?? 'Nova região'
+  }
+
+  function totalMovimentos(index: number) {
+    const movimentos = lista[index]?.movimentos
+    return Array.isArray(movimentos) ? movimentos.length : 0
+  }
+
+  function irPara(index: number) {
+    setAtivaBruta(index)
+    // Mobile: a barra fixa da Mobilidade fica a ~72px do topo (cabeçalho do app).
+    scrollToElement(topoRef.current, window.matchMedia?.('(min-width: 1024px)').matches ? 16 : 96)
+  }
+
+  function acrescentar() {
+    append({ regiao: '', movimentos: [] })
+    irPara(fields.length)
+  }
+
+  const anterior = ativa > 0 ? ativa - 1 : null
+  const proxima = ativa >= 0 && ativa < fields.length - 1 ? ativa + 1 : null
+  const field = ativa >= 0 ? fields[ativa] : undefined
+
+  return (
+    <div className="space-y-4">
+      <div ref={topoRef} className="scroll-mt-24 lg:scroll-mt-4" aria-hidden />
+      {fields.length === 0 ? (
+        <>
+          <p className="text-sm font-normal leading-normal text-muted">
+            {disabled
+              ? 'Nenhuma região escolhida.'
+              : 'Nenhuma região escolhida. Adicione uma região para ver só os movimentos dela.'}
+          </p>
+          {podeAcrescentar ? (
+            <Button type="button" variant="secondary" onClick={acrescentar}>
+              <Plus size={16} aria-hidden />
+              Adicionar região
+            </Button>
+          ) : null}
+        </>
+      ) : (
+        <div className="sticky top-[4.5rem] z-10 space-y-2 rounded-2xl border border-line bg-surface/95 p-3 shadow-sm backdrop-blur lg:top-2">
+          <p className="truncate text-sm text-muted" aria-live="polite">
+            Mobilidade <span aria-hidden>›</span>{' '}
+            <span className="font-semibold text-forest">{rotuloRegiao(ativa)}</span>
+            {' · '}
+            {totalMovimentos(ativa) === 1 ? '1 movimento' : `${totalMovimentos(ativa)} movimentos`}
+            {fields.length > 1 ? ` · região ${ativa + 1} de ${fields.length}` : ''}
+          </p>
+          <div
+            role="tablist"
+            aria-label="Regiões da mobilidade"
+            className="flex min-w-0 gap-2 overflow-x-auto overscroll-x-contain pb-0.5 [scrollbar-width:thin]"
+          >
+            {fields.map((item, index) => {
+              const selecionada = index === ativa
+              const total = totalMovimentos(index)
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selecionada}
+                  onClick={() => irPara(index)}
+                  className={[
+                    'inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl border px-3 text-sm transition-colors',
+                    selecionada
+                      ? 'border-forest bg-forest font-semibold text-white'
+                      : 'border-line bg-canvas text-ink hover:border-forest/30',
+                  ].join(' ')}
+                >
+                  {rotuloRegiao(index)}
+                  <span
+                    className={[
+                      'rounded-full px-1.5 text-xs',
+                      selecionada ? 'bg-white/20 text-white' : 'bg-accent-soft text-forest',
+                    ].join(' ')}
+                  >
+                    {total}
+                  </span>
+                </button>
+              )
+            })}
+            {podeAcrescentar ? (
+              <button
+                type="button"
+                onClick={acrescentar}
+                className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl border border-dashed border-forest/30 px-3 text-sm font-semibold text-forest transition-colors hover:bg-accent-soft"
+              >
+                <Plus size={14} aria-hidden />
+                Região
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
+      {field ? (
+        <CartaoRegiao
+          key={field.id}
+          index={ativa}
+          escolhidas={escolhidas}
+          podeAcrescentar={false}
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          control={control}
+          disabled={disabled}
+          onAdd={acrescentar}
+          onAskRemove={() => setPendente(ativa)}
+        />
+      ) : null}
+      {anterior !== null || proxima !== null ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {anterior !== null ? (
+            <Button type="button" variant="ghost" onClick={() => irPara(anterior)}>
+              <ChevronLeft size={16} aria-hidden />
+              {rotuloRegiao(anterior)}
+            </Button>
+          ) : (
+            <span />
+          )}
+          {proxima !== null ? (
+            <Button type="button" variant="secondary" onClick={() => irPara(proxima)}>
+              Próxima região: {rotuloRegiao(proxima)}
+              <ChevronRight size={16} aria-hidden />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {registroAnterior.trim() ? (
+        <p className="text-sm font-normal leading-normal text-ink whitespace-pre-wrap">
+          <span className="font-semibold">Registro anterior</span>
+          {`\n${registroAnterior}`}
+        </p>
+      ) : null}
+      {!disabled ? (
+        <ConfirmDialog
+          open={pendente !== null}
+          title="Remover região?"
+          description="Os movimentos desta região saem da avaliação. Esta ação não pode ser desfeita."
+          confirmLabel="Remover região"
+          cancelLabel="Manter região"
+          tone="danger"
+          onConfirm={() => {
+            if (pendente !== null) {
+              remove(pendente)
+              setAtivaBruta((atual) => Math.max(0, atual - (pendente <= atual ? 1 : 0)))
+            }
+            setPendente(null)
+          }}
+          onClose={() => setPendente(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+const LADOS_ACHADO: ReadonlyArray<{ value: LadoAchado; label: string }> = [
+  { value: 'direito', label: 'Direito' },
+  { value: 'esquerdo', label: 'Esquerdo' },
+  { value: 'bilateral', label: 'Bilateral' },
+  { value: 'central', label: 'Central' },
+  { value: 'naoSeAplica', label: 'Não se aplica' },
+]
+
+const ACHADOS_PALPACAO: ReadonlyArray<{ key: AchadoPalpacao; label: string }> = [
+  { key: 'semAlteracao', label: 'Sem alteração' },
+  { key: 'doloroso', label: 'Doloroso' },
+  { key: 'edema', label: 'Edema' },
+  { key: 'tensao', label: 'Tensão aumentada' },
+  { key: 'crepitacao', label: 'Crepitação' },
+  { key: 'temperatura', label: 'Alteração de temperatura' },
+  { key: 'outro', label: 'Outro' },
+]
+
+type RascunhoAchado = {
+  regiao: string
+  buscaLocal: string
+  local: string
+  localOutro: string
+  lado: string
+  achados: string[]
+  achadoOutro: string
+  dor: string
+  observacao: string
+}
+
+const RASCUNHO_VAZIO: RascunhoAchado = {
+  regiao: '',
+  buscaLocal: '',
+  local: '',
+  localOutro: '',
+  lado: '',
+  achados: [],
+  achadoOutro: '',
+  dor: '',
+  observacao: '',
+}
+
+function ladoValido(valor: string): LadoAchado | undefined {
+  return LADOS_ACHADO.find((item) => item.value === valor)?.value
+}
+
+function rotuloRegiaoPalpacao(chave: string) {
+  return CATALOGO_PALPACAO.find((item) => item.key === chave)?.label ?? chave
+}
+
+function rotuloLocalAchado(regiao: string, local: string, localOutro?: string) {
+  if (local === 'outro' && localOutro?.trim()) return localOutro.trim()
+  const catalogo = CATALOGO_PALPACAO.find((item) => item.key === regiao)
+  return catalogo?.locais.find((item) => item.key === local)?.label ?? local
+}
+
+function rotuloAchadoPalpacao(tipos?: readonly string[], achadoOutro?: string) {
+  return (tipos ?? [])
+    .map((tipo) =>
+      tipo === 'outro' && achadoOutro?.trim()
+        ? `Outro: ${achadoOutro.trim()}`
+        : ACHADOS_PALPACAO.find((item) => item.key === tipo)?.label ?? tipo,
+    )
+    .join(', ')
+}
+
+function rotuloLadoAchado(lado?: string) {
+  if (!lado) return ''
+  return LADOS_ACHADO.find((item) => item.value === lado)?.label ?? ''
+}
+
+function rotuloDorAchado(dor?: number) {
+  if (typeof dor !== 'number' || !Number.isFinite(dor)) return ''
+  return `${dor}/10`
+}
+
+function gravarAchado(rascunho: RascunhoAchado) {
+  const lado = ladoValido(rascunho.lado)
+  const tipos = tiposValidos(rascunho.achados)
+  const dor = vazioViraUndefined(rascunho.dor)
+  const item: {
+    regiao: string
+    local: string
+    localOutro?: string
+    lado?: LadoAchado
+    tipos?: AchadoPalpacao[]
+    achadoOutro?: string
+    dor?: number
+    observacao?: string
+  } = {
+    regiao: rascunho.regiao,
+    local: rascunho.local,
+  }
+  if (rascunho.local === 'outro' && rascunho.localOutro.trim()) item.localOutro = rascunho.localOutro.trim()
+  if (lado) item.lado = lado
+  if (tipos.length > 0) item.tipos = tipos
+  if (tipos.includes('outro') && rascunho.achadoOutro.trim()) item.achadoOutro = rascunho.achadoOutro.trim()
+  if (typeof dor === 'number') item.dor = dor
+  if (rascunho.observacao.trim()) item.observacao = rascunho.observacao.trim()
+  return item
+}
+
+function locaisDaRegiao(regiao: string, consulta: string) {
+  const catalogo = CATALOGO_PALPACAO.find((item) => item.key === regiao)
+  if (!catalogo) return []
+  const filtro = fold(consulta.trim())
+  const visiveis = catalogo.locais.filter((item) => !filtro || fold(item.label).includes(filtro))
+  const resto = visiveis.filter((item) => item.key !== 'outro')
+  const outro = visiveis.filter((item) => item.key === 'outro')
+  return [...resto, ...outro]
+}
+
+function RegistroAnterior({ texto }: { texto: string }) {
+  if (!texto.trim()) return null
+  return (
+    <p className="whitespace-pre-wrap">
+      <span className="text-sm font-semibold text-ink">Registro anterior</span>
+      {'\n'}
+      <span className="text-sm font-normal leading-normal text-ink">{texto}</span>
+    </p>
+  )
+}
+
+function AcoesAchado({
+  disabled,
+  onEdit,
+  onAskRemove,
+}: {
+  disabled?: boolean
+  onEdit: () => void
+  onAskRemove: () => void
+}) {
+  if (disabled) return null
+  return (
+    <div className="flex flex-wrap gap-3">
+      <button type="button" className="min-h-11 text-sm text-ink" onClick={onEdit}>
+        Editar achado
+      </button>
+      <button type="button" className="min-h-11 text-sm text-muted hover:text-error" onClick={onAskRemove}>
+        Remover achado
+      </button>
+    </div>
+  )
+}
+
+/** Frase curta para a dor à palpação (escala 0–10). */
+function descricaoDorPalpacao(nivel: number): string {
+  if (nivel <= 0) return 'Sem dor à palpação'
+  if (nivel <= 3) return 'Dor leve à palpação'
+  if (nivel <= 6) return 'Dor moderada à palpação'
+  if (nivel <= 9) return 'Dor intensa à palpação'
+  return 'Pior dor imaginável à palpação'
+}
+
+function FormularioAchado({
+  rascunho,
+  setRascunho,
+  editando,
+  disabled,
+  onAdd,
+  onSave,
+  onCancel,
+}: {
+  rascunho: RascunhoAchado
+  setRascunho: (valor: RascunhoAchado | ((atual: RascunhoAchado) => RascunhoAchado)) => void
+  editando: boolean
+  disabled?: boolean
+  onAdd: () => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  const idRegiao = useId()
+  const idLocal = useId()
+  const idOutroLocal = useId()
+  const idOutroAchado = useId()
+  const idObs = useId()
+  const idLado = useId()
+  const catalogo = CATALOGO_PALPACAO.find((item) => item.key === rascunho.regiao)
+  const locais = catalogo ? locaisDaRegiao(rascunho.regiao, rascunho.buscaLocal) : []
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label htmlFor={idRegiao} className={ROTULO}>
+          Região
+        </label>
+        <select
+          id={idRegiao}
+          className={CAMPO}
+          disabled={disabled}
+          value={rascunho.regiao}
+          onChange={(event) => {
+            const next = event.target.value
+            setRascunho((atual) => {
+              const proximo = CATALOGO_PALPACAO.find((item) => item.key === next)
+              const permanece = proximo?.locais.some((item) => item.key === atual.local) ?? false
+              return {
+                ...atual,
+                regiao: next,
+                buscaLocal: '',
+                local: permanece ? atual.local : '',
+                localOutro: permanece ? atual.localOutro : '',
+              }
+            })
+          }}
+        >
+          <option value="">Escolha a região</option>
+          {CATALOGO_PALPACAO.map((item) => (
+            <option key={item.key} value={item.key}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-2">
+        <label htmlFor={idLocal} className={ROTULO}>
+          Local / estrutura
+        </label>
+        <input
+          id={idLocal}
+          type="search"
+          className={CAMPO}
+          disabled={disabled || !rascunho.regiao}
+          value={rascunho.buscaLocal}
+          onChange={(event) =>
+            setRascunho((atual) => ({ ...atual, buscaLocal: event.target.value }))
+          }
+        />
+        {rascunho.regiao ? (
+          <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            {locais.map((item) => {
+              const ativo = rascunho.local === item.key
+              return (
+                <li key={item.key} className="min-w-0">
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    aria-pressed={ativo}
+                    title={item.label}
+                    className={`flex h-full min-h-10 w-full items-center rounded-xl border px-3 py-2 text-left text-xs font-semibold leading-snug transition-colors disabled:opacity-100 ${
+                      ativo ? CHIP_ATIVO : `${CHIP_INATIVO} hover:border-forest/30 hover:bg-canvas`
+                    }`}
+                    onClick={() =>
+                      setRascunho((atual) => ({
+                        ...atual,
+                        local: item.key,
+                        localOutro: item.key === 'outro' ? atual.localOutro : '',
+                      }))
+                    }
+                  >
+                    {item.label}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+        <p className="text-sm font-normal leading-normal text-muted">
+          Primeiro selecione a região. Local/estrutura mostra só as opções dessa região, com busca e Outro para digitar.
+        </p>
+      </div>
+      {rascunho.local === 'outro' ? (
+        <div className="space-y-2">
+          <label htmlFor={idOutroLocal} className={ROTULO}>
+            Outro local
+          </label>
+          <input
+            id={idOutroLocal}
+            type="text"
+            className={CAMPO}
+            disabled={disabled}
+            value={rascunho.localOutro}
+            onChange={(event) =>
+              setRascunho((atual) => ({ ...atual, localOutro: event.target.value }))
+            }
+          />
+        </div>
+      ) : null}
+      <fieldset className="space-y-2">
+        <legend className="text-xs text-muted">Lado</legend>
+        <div className="flex flex-wrap gap-x-4 gap-y-2">
+          {LADOS_ACHADO.map((opcao) => (
+            <label key={opcao.value} className="inline-flex min-h-11 items-center gap-2 text-sm text-ink">
+              <input
+                type="radio"
+                name={idLado}
+                value={opcao.value}
+                className="accent-forest"
+                disabled={disabled}
+                checked={rascunho.lado === opcao.value}
+                onChange={() => setRascunho((atual) => ({ ...atual, lado: opcao.value }))}
+              />
+              <span>{opcao.label}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div className="space-y-2">
+        <p className={ROTULO}>
+          Achado à palpação <span className="font-normal text-muted">(pode marcar mais de um)</span>
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {ACHADOS_PALPACAO.map((item) => {
+            const ativo = rascunho.achados.includes(item.key)
+            return (
+              <button
+                key={item.key}
+                type="button"
+                aria-pressed={ativo}
+                disabled={disabled}
+                className={`${CHIP} ${ativo ? CHIP_ATIVO : CHIP_INATIVO}`}
+                onClick={() =>
+                  setRascunho((atual) => {
+                    const marcado = atual.achados.includes(item.key)
+                    // "Sem alteração" exclui os outros, e vice-versa.
+                    const achados = marcado
+                      ? atual.achados.filter((key) => key !== item.key)
+                      : item.key === 'semAlteracao'
+                        ? [item.key]
+                        : [...atual.achados.filter((key) => key !== 'semAlteracao'), item.key]
+                    return {
+                      ...atual,
+                      achados,
+                      achadoOutro: achados.includes('outro') ? atual.achadoOutro : '',
+                    }
+                  })
+                }
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      {rascunho.achados.includes('outro') ? (
+        <div className="space-y-2">
+          <label htmlFor={idOutroAchado} className={ROTULO}>
+            Outro achado
+          </label>
+          <input
+            id={idOutroAchado}
+            type="text"
+            className={CAMPO}
+            disabled={disabled}
+            value={rascunho.achadoOutro}
+            onChange={(event) =>
+              setRascunho((atual) => ({ ...atual, achadoOutro: event.target.value }))
+            }
+          />
+        </div>
+      ) : null}
+      <fieldset className="space-y-2">
+        <legend className={ROTULO}>Dor à palpação</legend>
+        <div className="grid grid-cols-6 gap-1.5 sm:grid-cols-11" role="radiogroup" aria-label="Dor à palpação de 0 a 10">
+          {Array.from({ length: 11 }, (_, nivel) => {
+            const selecionado = rascunho.dor !== '' && Number(rascunho.dor) === nivel
+            return (
+              <button
+                key={nivel}
+                type="button"
+                role="radio"
+                aria-checked={selecionado}
+                disabled={disabled}
+                onClick={() =>
+                  setRascunho((atual) => ({ ...atual, dor: selecionado ? '' : String(nivel) }))
+                }
+                className={[
+                  'flex h-11 items-center justify-center rounded-xl border text-sm font-semibold transition-colors disabled:opacity-60',
+                  selecionado
+                    ? 'border-forest bg-forest text-white'
+                    : 'border-line bg-surface text-ink hover:border-forest/30 hover:bg-canvas',
+                ].join(' ')}
+              >
+                {nivel}
+              </button>
+            )
+          })}
+        </div>
+        {rascunho.dor !== '' ? (
+          <div className="rounded-xl bg-accent-soft/60 px-3 py-2">
+            <p className="text-sm font-semibold text-ink">Dor {rascunho.dor}/10</p>
+            <p className="text-xs text-muted">{descricaoDorPalpacao(Number(rascunho.dor))}</p>
+          </div>
+        ) : (
+          <p className="text-xs text-muted">Toque no número. Toque de novo para limpar.</p>
+        )}
+      </fieldset>
+      <div className="space-y-2">
+        <label htmlFor={idObs} className={ROTULO}>
+          Observações
+        </label>
+        <textarea
+          id={idObs}
+          rows={2}
+          className={`${CAMPO} resize-y`}
+          disabled={disabled}
+          placeholder="Ex.: reproduz a queixa, irradia, ponto-gatilho, tensão, edema ao toque…"
+          value={rascunho.observacao}
+          onChange={(event) =>
+            setRascunho((atual) => ({ ...atual, observacao: event.target.value }))
+          }
+        />
+      </div>
+      {!disabled ? (
+        editando ? (
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" disabled={!rascunho.regiao} onClick={onSave}>
+              Salvar achado
+            </Button>
+            <Button type="button" variant="secondary" onClick={onCancel}>
+              Cancelar edição
+            </Button>
+          </div>
+        ) : (
+          <Button type="button" variant="secondary" disabled={!rascunho.regiao} onClick={onAdd}>
+            Adicionar achado
+          </Button>
+        )
+      ) : null}
+    </div>
+  )
+}
+
+function TabelaAchados({
+  achados,
+  disabled,
+  onEdit,
+  onAskRemove,
+}: {
+  achados: Array<{
+    id: string
+    regiao: string
+    local: string
+    localOutro?: string
+    lado?: string
+    tipos?: string[]
+    achadoOutro?: string
+    dor?: number
+    observacao?: string
+  }>
+  disabled?: boolean
+  onEdit: (index: number) => void
+  onAskRemove: (index: number) => void
+}) {
+  const colunas = ['Região', 'Local / estrutura', 'Lado', 'Achado', 'Dor', 'Observação'] as const
+
+  function celulas(item: (typeof achados)[number]) {
+    return [
+      rotuloRegiaoPalpacao(item.regiao),
+      rotuloLocalAchado(item.regiao, item.local, item.localOutro),
+      rotuloLadoAchado(item.lado),
+      rotuloAchadoPalpacao(item.tipos, item.achadoOutro),
+      rotuloDorAchado(item.dor),
+      item.observacao?.trim() ?? '',
+    ]
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold leading-[1.2] text-ink">Achados registrados</p>
+      {achados.length === 0 ? (
+        <p className="text-sm font-normal leading-normal text-muted">
+          {disabled
+            ? 'Nenhum achado registrado.'
+            : 'Nenhum achado registrado. Preencha o formulário acima e toque em Adicionar achado.'}
+        </p>
+      ) : (
+        <>
+          <div className="space-y-3 sm:hidden">
+            {achados.map((item, index) => {
+              const valores = celulas(item)
+              return (
+              <div key={item.id} className="space-y-2 rounded-2xl border border-line bg-surface p-4">
+                {colunas.map((coluna, colunaIndex) => (
+                  <p key={coluna} className="text-sm font-normal leading-normal text-ink">
+                    <span className="font-semibold">{coluna}</span>
+                    {valores[colunaIndex] ? ` ${valores[colunaIndex]}` : ''}
+                  </p>
+                ))}
+                <AcoesAchado
+                  disabled={disabled}
+                  onEdit={() => onEdit(index)}
+                  onAskRemove={() => onAskRemove(index)}
+                />
+              </div>
+              )
+            })}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr>
+                  {colunas.map((coluna) => (
+                    <th
+                      key={coluna}
+                      className="border border-line bg-canvas px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.14em] text-muted"
+                    >
+                      {coluna}
+                    </th>
+                  ))}
+                  {!disabled ? (
+                    <th className="border border-line bg-canvas px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.14em] text-muted">
+                      <span className="sr-only">Ações</span>
+                    </th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {achados.map((item, index) => (
+                  <tr key={item.id}>
+                    {celulas(item).map((valor, colunaIndex) => (
+                      <td
+                        key={colunas[colunaIndex]}
+                        className="border border-line px-3 py-2 text-sm font-normal leading-normal text-ink"
+                      >
+                        {valor}
+                      </td>
+                    ))}
+                    {!disabled ? (
+                      <td className="border border-line px-3 py-2">
+                        <AcoesAchado
+                          disabled={disabled}
+                          onEdit={() => onEdit(index)}
+                          onAskRemove={() => onAskRemove(index)}
+                        />
+                      </td>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function CamposTesteMarcado({
+  indice,
+  outro,
+  register,
+  disabled,
+}: {
+  indice: number
+  outro: boolean
+  register: UseFormRegister<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const idOutro = useId()
+  const idResultado = useId()
+
+  return (
+    <div className="space-y-2">
+      {outro ? (
+        <div className="space-y-2">
+          <label htmlFor={idOutro} className={ROTULO}>
+            Outro teste
+          </label>
+          <input
+            id={idOutro}
+            type="text"
+            className={CAMPO}
+            disabled={disabled}
+            {...register(`ficha.avaliacaoPlano.palpacaoTestes.testes.${indice}.outroTexto`)}
+          />
+        </div>
+      ) : null}
+      <div className="space-y-2">
+        <label htmlFor={idResultado} className={ROTULO}>
+          Resultado
+        </label>
+        <input
+          id={idResultado}
+          type="text"
+          className={CAMPO}
+          disabled={disabled}
+          {...register(`ficha.avaliacaoPlano.palpacaoTestes.testes.${indice}.resultado`)}
+        />
+      </div>
+    </div>
+  )
+}
+
+function GrupoTestes({
+  label,
+  aberto,
+  onToggle,
+  children,
+}: {
+  label: string
+  aberto: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  const painelId = useId()
+
+  const rotuloId = useId()
+
+  return (
+    <div role="group" aria-labelledby={rotuloId} className="border-b border-line last:border-b-0">
+      <button
+        id={rotuloId}
+        type="button"
+        aria-expanded={aberto}
+        aria-controls={painelId}
+        onClick={onToggle}
+        className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm font-semibold leading-[1.2] text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/25"
+      >
+        <ChevronDown
+          size={18}
+          aria-hidden
+          className={[
+            'shrink-0 text-forest transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+            aberto ? 'rotate-0' : '-rotate-90',
+          ].join(' ')}
+        />
+        <span>{label}</span>
+      </button>
+      <div
+        id={painelId}
+        inert={aberto ? undefined : true}
+        className={[
+          'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+          aberto ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        ].join(' ')}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="pb-2 pl-9 pr-3">{children}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Um teste marcado: o nome abre e fecha os campos dele; o X desmarca. Fechar não apaga nada. */
+function ItemMarcado({
+  titulo,
+  subtitulo,
+  onRemove,
+  disabled,
+  children,
+}: {
+  titulo: string
+  subtitulo?: string
+  onRemove: () => void
+  disabled?: boolean
+  children: ReactNode
+}) {
+  const [aberto, setAberto] = useState(true)
+  const painelId = useId()
+  return (
+    <li className="py-3 first:pt-0 last:pb-0">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          aria-expanded={aberto}
+          aria-controls={painelId}
+          onClick={() => setAberto((atual) => !atual)}
+          className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-lg text-left text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+        >
+          <ChevronDown
+            size={16}
+            aria-hidden
+            className={[
+              'shrink-0 text-forest transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+              aberto ? 'rotate-0' : '-rotate-90',
+            ].join(' ')}
+          />
+          <span className="min-w-0">
+            <span className="font-semibold">{titulo}</span>
+            {subtitulo ? <span className="text-muted"> · {subtitulo}</span> : null}
+          </span>
+        </button>
+        {!disabled ? (
+          <button
+            type="button"
+            aria-label={`Desmarcar ${titulo}`}
+            title="Desmarcar"
+            onClick={onRemove}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:text-error"
+          >
+            <X size={16} aria-hidden />
+          </button>
+        ) : null}
+      </div>
+      <div
+        id={painelId}
+        inert={aberto ? undefined : true}
+        className={[
+          'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+          aberto ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        ].join(' ')}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="space-y-3 pl-6 pt-2">{children}</div>
+        </div>
+      </div>
+    </li>
+  )
+}
+
+/** Caixa "… marcados" com cabeçalho que recolhe e abre a lista (só visual; os dados ficam na ficha). */
+function SecaoMarcados({ titulo, quantidade, children }: { titulo: string; quantidade: number; children: ReactNode }) {
+  const [aberta, setAberta] = useState(true)
+  const painelId = useId()
+  return (
+    <section aria-label={titulo} className="rounded-2xl border border-line bg-surface p-4">
+      <h4>
+        <button
+          type="button"
+          aria-expanded={aberta}
+          aria-controls={painelId}
+          onClick={() => setAberta((atual) => !atual)}
+          className="flex min-h-10 w-full items-center gap-2 rounded-lg text-left text-sm font-semibold leading-[1.2] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+        >
+          <ChevronDown
+            size={18}
+            aria-hidden
+            className={[
+              'shrink-0 text-forest transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+              aberta ? 'rotate-0' : '-rotate-90',
+            ].join(' ')}
+          />
+          <span>
+            {titulo} <span className="font-normal text-muted">({quantidade})</span>
+          </span>
+        </button>
+      </h4>
+      <div
+        id={painelId}
+        inert={aberta ? undefined : true}
+        className={[
+          'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+          aberta ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        ].join(' ')}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="pt-3">{children}</div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ListaTestes({
+  register,
+  control,
+  disabled,
+  registroAnterior,
+}: {
+  register: UseFormRegister<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+  registroAnterior: string
+}) {
+  const idBusca = useId()
+  const [busca, setBusca] = useState('')
+  const [manual, setManual] = useState<{ consulta: string; chaves: Record<string, boolean> }>({
+    consulta: '',
+    chaves: {},
+  })
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'ficha.avaliacaoPlano.palpacaoTestes.testes',
+  })
+  const consulta = busca.trim()
+  const filtro = fold(consulta)
+  const regioes = CATALOGO_TESTES.flatMap((regiao) => {
+    const outro = regiao.testes.find((item) => item.key === 'outro')
+    const demais = regiao.testes.filter((item) => item.key !== 'outro')
+    if (!filtro) return [regiao]
+    const casados = demais.filter((item) => fold(item.label).includes(filtro))
+    const outroCasa = outro ? fold(outro.label).includes(filtro) : false
+    if (casados.length === 0 && !outroCasa) return []
+    return [{ ...regiao, testes: outro ? [...casados, outro] : casados }]
+  })
+  const visiveis = new Set(
+    regioes.flatMap((regiao) => regiao.testes.map((item) => `${regiao.key}:${item.key}`)),
+  )
+  const escondidos = fields.some((item) => !visiveis.has(`${item.regiao}:${item.teste}`))
+  const chaves = manual.consulta === filtro ? manual.chaves : {}
+  const [listaAberta, setListaAberta] = useState(false)
+  const idLista = useId()
+
+  function abertoDe(key: string) {
+    const escolhido = chaves[key]
+    if (escolhido !== undefined) return escolhido
+    return Boolean(filtro)
+  }
+
+  const todasAbertas = regioes.length > 0 && regioes.every((regiao) => abertoDe(regiao.key))
+
+  function alternarTodas() {
+    const proximo = !todasAbertas
+    setManual({
+      consulta: filtro,
+      chaves: Object.fromEntries(regioes.map((regiao) => [regiao.key, proximo])),
+    })
+  }
+
+  function alternar(key: string, atual: boolean) {
+    setManual((prev) => ({
+      consulta: filtro,
+      chaves: {
+        ...(prev.consulta === filtro ? prev.chaves : {}),
+        [key]: !atual,
+      },
+    }))
+  }
+
+  return (
+    <div className="space-y-4">
+      <button
+        type="button"
+        aria-expanded={listaAberta}
+        aria-controls={idLista}
+        onClick={() => setListaAberta((atual) => !atual)}
+        className="flex min-h-11 w-full items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 text-left transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+      >
+        <span className="flex items-center gap-2">
+          <ChevronDown
+            size={18}
+            aria-hidden
+            className={[
+              'shrink-0 text-forest transition-transform duration-300 motion-reduce:transition-none',
+              listaAberta ? 'rotate-0' : '-rotate-90',
+            ].join(' ')}
+          />
+          <span className="text-sm font-semibold leading-[1.2] text-ink">Lista de testes</span>
+        </span>
+        <span className="text-xs text-muted">
+          {fields.length === 0
+            ? 'Nenhum marcado'
+            : fields.length === 1
+              ? '1 marcado'
+              : `${fields.length} marcados`}
+        </span>
+      </button>
+      {listaAberta ? (
+      <div id={idLista} className="space-y-4">
+      <div className="space-y-2">
+        <label htmlFor={idBusca} className={ROTULO}>
+          Buscar teste
+        </label>
+        <input
+          id={idBusca}
+          type="search"
+          className={CAMPO}
+          disabled={disabled}
+          value={busca}
+          onChange={(event) => setBusca(event.target.value)}
+        />
+      </div>
+      {!consulta && fields.length === 0 ? (
+        <p className="text-sm font-normal leading-normal text-muted">
+          Nenhum teste marcado. Marque os testes na lista. Dá para marcar vários. Outro fica no fim de cada região.
+        </p>
+      ) : null}
+      {consulta && escondidos ? (
+        <p className="text-sm text-muted">
+          Testes marcados fora desta busca continuam na avaliação.
+        </p>
+      ) : null}
+      {consulta && regioes.length === 0 ? (
+        <p className="text-sm font-normal leading-normal text-muted">
+          Nenhum teste com esse texto. Apague a busca para ver a lista inteira.
+        </p>
+      ) : (
+        <div className="space-y-2">
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={alternarTodas}
+            className="min-h-11 rounded-xl px-3 text-sm font-semibold text-forest transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+          >
+            {todasAbertas ? 'Fechar todas as regiões' : 'Abrir todas as regiões'}
+          </button>
+        </div>
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+        {regioes.map((regiao) => {
+          const aberto = abertoDe(regiao.key)
+          return (
+            <GrupoTestes
+              key={regiao.key}
+              label={regiao.label}
+              aberto={aberto}
+              onToggle={() => alternar(regiao.key, aberto)}
+            >
+              <ul className="flex flex-col">
+                {regiao.testes.map((item) => {
+                  const indice = fields.findIndex(
+                    (campo) => campo.regiao === regiao.key && campo.teste === item.key,
+                  )
+                  const marcado = indice >= 0
+                  return (
+                    <li key={item.key}>
+                      <label className="inline-flex min-h-11 items-center gap-2 text-sm text-ink">
+                        <input
+                          type="checkbox"
+                          className="accent-forest"
+                          checked={marcado}
+                          disabled={disabled}
+                          onChange={() => {
+                            if (marcado) remove(indice)
+                            else append({ regiao: regiao.key, teste: item.key }, { shouldFocus: false })
+                          }}
+                        />
+                        <span>{item.label}</span>
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+            </GrupoTestes>
+          )
+        })}
+        </div>
+        </div>
+      )}
+      </div>
+      ) : null}
+      {fields.length > 0 ? (
+        <SecaoMarcados titulo="Testes marcados" quantidade={fields.length}>
+          <ul className="divide-y divide-line">
+            {fields.map((campo, indice) => {
+              const regiao = CATALOGO_TESTES.find((item) => item.key === campo.regiao)
+              const teste = regiao?.testes.find((item) => item.key === campo.teste)
+              return (
+                <ItemMarcado
+                  key={campo.id}
+                  titulo={teste?.label ?? campo.teste}
+                  subtitulo={regiao?.label}
+                  onRemove={() => remove(indice)}
+                  disabled={disabled}
+                >
+                  <CamposTesteMarcado
+                    indice={indice}
+                    outro={campo.teste === 'outro'}
+                    register={register}
+                    disabled={disabled}
+                  />
+                </ItemMarcado>
+              )
+            })}
+          </ul>
+        </SecaoMarcados>
+      ) : null}
+      <RegistroAnterior texto={registroAnterior} />
+    </div>
+  )
+}
+
+function ChipsEscolha<T extends string>({
+  legenda,
+  opcoes,
+  valor,
+  onChange,
+  disabled,
+}: {
+  legenda: string
+  opcoes: ReadonlyArray<{ value: T; label: string }>
+  valor: T | undefined
+  onChange: (next: T | undefined) => void
+  disabled?: boolean
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className={ROTULO}>{legenda}</legend>
+      <div className="flex flex-wrap gap-2">
+        {opcoes.map((opcao) => {
+          const ativo = valor === opcao.value
+          return (
+            <button
+              key={opcao.value}
+              type="button"
+              aria-pressed={ativo}
+              disabled={disabled}
+              onClick={() => onChange(ativo ? undefined : opcao.value)}
+              className={[CHIP, '!min-h-10 !px-3', ativo ? CHIP_ATIVO : CHIP_INATIVO].join(' ')}
+            >
+              {opcao.label}
+            </button>
+          )
+        })}
+      </div>
+    </fieldset>
+  )
+}
+
+function CartaoFuncional({
+  indice,
+  categoria,
+  teste,
+  register,
+  control,
+  disabled,
+  onRemove,
+}: {
+  indice: number
+  categoria: string
+  teste: string
+  register: UseFormRegister<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+  onRemove: () => void
+}) {
+  const base = `ficha.avaliacaoPlano.palpacaoTestes.funcionais.${indice}` as const
+  const catalogo = testeFuncional(categoria, teste)
+  const comparavel = Boolean(catalogo?.comparavel)
+  const [outroTexto, direito, esquerdo, achados] = useWatch({
+    control,
+    name: [`${base}.outroTexto`, `${base}.direito`, `${base}.esquerdo`, `${base}.achados`],
+  })
+  const assimetria = comparavel ? assimetriaFuncional(direito, esquerdo) : null
+  const categoriaLabel = CATALOGO_FUNCIONAIS.find((item) => item.key === categoria)?.label
+  const ids = { outro: useId(), resultado: useId(), unidade: useId(), d: useId(), e: useId(), dor: useId(), achadoOutro: useId(), obs: useId() }
+  const nome = rotuloTesteFuncional({ categoria, teste, outroTexto })
+
+  const unidadeSelect = (
+    <div className="space-y-2">
+      <label htmlFor={ids.unidade} className={ROTULO}>
+        Unidade
+      </label>
+      <select id={ids.unidade} className={CAMPO} disabled={disabled} {...register(`${base}.unidade`, { setValueAs: (v) => (v ? v : undefined) })}>
+        <option value="">—</option>
+        {UNIDADES_FUNCIONAIS.map((unidade) => (
+          <option key={unidade} value={unidade}>
+            {unidade}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+
+  return (
+    <ItemMarcado
+      titulo={nome}
+      subtitulo={categoriaLabel && categoria !== 'outro' ? categoriaLabel : undefined}
+      onRemove={onRemove}
+      disabled={disabled}
+    >
+      {teste === 'outro' ? (
+        <div className="space-y-2">
+          <label htmlFor={ids.outro} className={ROTULO}>
+            Qual teste
+          </label>
+          <input id={ids.outro} type="text" className={CAMPO} disabled={disabled} {...register(`${base}.outroTexto`)} />
+        </div>
+      ) : null}
+
+      {comparavel ? (
+        <div className="space-y-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-2">
+              <label htmlFor={ids.d} className={ROTULO}>
+                Direito
+              </label>
+              <input id={ids.d} type="text" inputMode="decimal" className={CAMPO} disabled={disabled} {...register(`${base}.direito`)} />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor={ids.e} className={ROTULO}>
+                Esquerdo
+              </label>
+              <input id={ids.e} type="text" inputMode="decimal" className={CAMPO} disabled={disabled} {...register(`${base}.esquerdo`)} />
+            </div>
+            {unidadeSelect}
+          </div>
+          <p className="text-sm text-muted" aria-live="polite">
+            Assimetria:{' '}
+            {assimetria ? (
+              <span className="font-semibold text-ink">
+                {String(assimetria.percentual).replace('.', ',')}%
+                {assimetria.menor ? ` (menor no ${assimetria.menor === 'D' ? 'direito' : 'esquerdo'})` : ''}
+              </span>
+            ) : (
+              'preencha os dois lados'
+            )}
+          </p>
+        </div>
+      ) : (
+        <>
+          <Controller
+            control={control}
+            name={`${base}.lado`}
+            render={({ field }) => (
+              <ChipsEscolha legenda="Lado" opcoes={LADOS_FUNCIONAIS} valor={field.value} onChange={field.onChange} disabled={disabled} />
+            )}
+          />
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <div className="space-y-2">
+              <label htmlFor={ids.resultado} className={ROTULO}>
+                Resultado
+              </label>
+              <input id={ids.resultado} type="text" className={CAMPO} disabled={disabled} {...register(`${base}.resultado`)} />
+            </div>
+            {unidadeSelect}
+          </div>
+        </>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="space-y-2">
+          <label htmlFor={ids.dor} className={ROTULO}>
+            Dor (0–10)
+          </label>
+          <select
+            id={ids.dor}
+            className={CAMPO}
+            disabled={disabled}
+            {...register(`${base}.dor`, { setValueAs: (v) => (v === '' || v === undefined || v === null ? undefined : Number(v)) })}
+          >
+            <option value="">—</option>
+            {Array.from({ length: 11 }, (_, n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+        <Controller
+          control={control}
+          name={`${base}.qualidade`}
+          render={({ field }) => (
+            <ChipsEscolha legenda="Qualidade" opcoes={QUALIDADES_FUNCIONAIS} valor={field.value} onChange={field.onChange} disabled={disabled} />
+          )}
+        />
+      </div>
+
+      <Controller
+        control={control}
+        name={`${base}.achados`}
+        render={({ field }) => {
+          const marcados = new Set((field.value ?? []) as string[])
+          return (
+            <fieldset className="space-y-2">
+              <legend className={ROTULO}>Achados</legend>
+              <div className="flex flex-wrap gap-2">
+                {ACHADOS_FUNCIONAIS.map((achado) => {
+                  const ativo = marcados.has(achado.key)
+                  return (
+                    <button
+                      key={achado.key}
+                      type="button"
+                      aria-pressed={ativo}
+                      disabled={disabled}
+                      onClick={() => {
+                        const proximo = new Set(marcados)
+                        if (ativo) proximo.delete(achado.key)
+                        else proximo.add(achado.key)
+                        const lista = ACHADOS_FUNCIONAIS.map((a) => a.key).filter((key) => proximo.has(key)) as AchadoFuncional[]
+                        field.onChange(lista.length > 0 ? lista : undefined)
+                      }}
+                      className={[CHIP, '!min-h-10 !px-3', ativo ? CHIP_ATIVO : CHIP_INATIVO].join(' ')}
+                    >
+                      {achado.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </fieldset>
+          )
+        }}
+      />
+      {Array.isArray(achados) && achados.includes('outro') ? (
+        <div className="space-y-2">
+          <label htmlFor={ids.achadoOutro} className={ROTULO}>
+            Outro achado
+          </label>
+          <input id={ids.achadoOutro} type="text" className={CAMPO} disabled={disabled} {...register(`${base}.achadoOutro`)} />
+        </div>
+      ) : null}
+
+      <div className="space-y-2">
+        <label htmlFor={ids.obs} className={ROTULO}>
+          Observação
+        </label>
+        <input id={ids.obs} type="text" className={CAMPO} disabled={disabled} {...register(`${base}.observacao`)} />
+      </div>
+    </ItemMarcado>
+  )
+}
+
+function ListaFuncionais({
+  register,
+  control,
+  disabled,
+}: {
+  register: UseFormRegister<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const idBusca = useId()
+  const idLista = useId()
+  const [busca, setBusca] = useState('')
+  const [listaAberta, setListaAberta] = useState(false)
+  const [abertas, setAbertas] = useState<Record<string, boolean>>({})
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'ficha.avaliacaoPlano.palpacaoTestes.funcionais',
+  })
+  const filtro = fold(busca.trim())
+  const categorias = CATALOGO_FUNCIONAIS.flatMap((categoria) => {
+    if (!filtro) return [categoria]
+    const casados = categoria.testes.filter(
+      (item) => fold(item.label).includes(filtro) || fold(categoria.label).includes(filtro),
+    )
+    return casados.length > 0 ? [{ ...categoria, testes: casados }] : []
+  })
+
+  return (
+    <div className="space-y-4">
+      <button
+        type="button"
+        aria-expanded={listaAberta}
+        aria-controls={idLista}
+        onClick={() => setListaAberta((atual) => !atual)}
+        className="flex min-h-11 w-full items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 text-left transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+      >
+        <span className="flex items-center gap-2">
+          <ChevronDown
+            size={18}
+            aria-hidden
+            className={[
+              'shrink-0 text-forest transition-transform duration-300 motion-reduce:transition-none',
+              listaAberta ? 'rotate-0' : '-rotate-90',
+            ].join(' ')}
+          />
+          <span className="text-sm font-semibold leading-[1.2] text-ink">Lista de testes funcionais</span>
+        </span>
+        <span className="text-xs text-muted">
+          {fields.length === 0 ? 'Nenhum marcado' : fields.length === 1 ? '1 marcado' : `${fields.length} marcados`}
+        </span>
+      </button>
+      {listaAberta ? (
+        <div id={idLista} className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor={idBusca} className={ROTULO}>
+              Buscar teste ou categoria
+            </label>
+            <input
+              id={idBusca}
+              type="search"
+              className={CAMPO}
+              disabled={disabled}
+              value={busca}
+              placeholder="Ex.: hop, marcha, prancha"
+              onChange={(event) => setBusca(event.target.value)}
+            />
+          </div>
+          {categorias.length === 0 ? (
+            <p className="text-sm text-muted">Nenhum teste com esse texto. Use “Outro” na categoria certa.</p>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+              {categorias.map((categoria) => {
+                const aberto = abertas[categoria.key] ?? Boolean(filtro)
+                return (
+                  <GrupoTestes
+                    key={categoria.key}
+                    label={categoria.label}
+                    aberto={aberto}
+                    onToggle={() => setAbertas((atual) => ({ ...atual, [categoria.key]: !aberto }))}
+                  >
+                    <ul className="flex flex-col">
+                      {categoria.testes.map((item) => {
+                        const indice = fields.findIndex(
+                          (campo) => campo.categoria === categoria.key && campo.teste === item.key,
+                        )
+                        const marcado = indice >= 0
+                        return (
+                          <li key={item.key}>
+                            <label className="inline-flex min-h-11 items-center gap-2 text-sm text-ink">
+                              <input
+                                type="checkbox"
+                                className="accent-forest"
+                                checked={marcado}
+                                disabled={disabled}
+                                onChange={() => {
+                                  if (marcado) remove(indice)
+                                  else
+                                    append(
+                                      {
+                                        categoria: categoria.key,
+                                        teste: item.key,
+                                        ...(item.unidade ? { unidade: item.unidade } : {}),
+                                      },
+                                      { shouldFocus: false },
+                                    )
+                                }}
+                              />
+                              <span>{item.label}</span>
+                            </label>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </GrupoTestes>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
+      {fields.length > 0 ? (
+        <SecaoMarcados titulo="Testes funcionais marcados" quantidade={fields.length}>
+          <ul className="divide-y divide-line">
+            {fields.map((campo, indice) => (
+              <CartaoFuncional
+                key={campo.id}
+                indice={indice}
+                categoria={campo.categoria}
+                teste={campo.teste}
+                register={register}
+                control={control}
+                disabled={disabled}
+                onRemove={() => remove(indice)}
+              />
+            ))}
+          </ul>
+        </SecaoMarcados>
+      ) : (
+        <p className="text-sm text-muted">Nenhum teste funcional marcado. Abra a lista, escolha a categoria e marque o teste.</p>
+      )}
+    </div>
+  )
+}
+
+function SubSecao({
+  numero,
+  icon: Icon,
+  titulo,
+  descricao,
+  children,
+}: {
+  numero: number
+  icon: LucideIcon
+  titulo: string
+  descricao: string
+  children: ReactNode
+}) {
+  const tituloId = useId()
+  return (
+    <section aria-labelledby={tituloId} className="rounded-2xl border border-line bg-canvas/60 p-4 sm:p-5">
+      <header className="mb-4 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h3 id={tituloId} className="flex items-center gap-2 text-base font-semibold leading-tight text-ink">
+            <Icon size={16} strokeWidth={1.75} aria-hidden className="shrink-0 text-forest" />
+            <span>
+              <span className="text-muted">{numero}.</span> {titulo}
+            </span>
+          </h3>
+          <p className="mt-1 text-sm leading-snug text-muted">{descricao}</p>
+        </div>
+      </header>
+      <div className="space-y-4">{children}</div>
+    </section>
+  )
+}
+
+function PalpacaoBloco({
+  register,
+  watch,
+  control,
+  disabled,
+}: {
+  register: UseFormRegister<EvaluationFormData>
+  watch: UseFormWatch<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const { fields, append, remove, update } = useFieldArray({
+    control,
+    name: 'ficha.avaliacaoPlano.palpacaoTestes.achados',
+  })
+  const [rascunho, setRascunho] = useState<RascunhoAchado>(RASCUNHO_VAZIO)
+  const [editando, setEditando] = useState<number | null>(null)
+  const [pendente, setPendente] = useState<number | null>(null)
+  const achadosBrutos = watch('ficha.avaliacaoPlano.palpacaoTestes.achados')
+  const achados = (Array.isArray(achadosBrutos) ? achadosBrutos : fields).slice(0, fields.length)
+  const palpacaoRegistro = watch('ficha.avaliacaoPlano.palpacaoTestes.palpacaoRegistroAnterior')
+  const testesRegistro = watch('ficha.avaliacaoPlano.palpacaoTestes.testesRegistroAnterior')
+  // Avaliada só na montagem: apagar o texto não faz os campos sumirem enquanto se edita.
+  const [funcaoLegada] = useState(() =>
+    Boolean(
+      watch('ficha.avaliacaoPlano.palpacaoTestes.testeFuncional')?.trim() ||
+        watch('ficha.avaliacaoPlano.palpacaoTestes.resultadoInicial')?.trim(),
+    ),
+  )
+
+  function adicionar() {
+    if (!rascunho.regiao) return
+    append(gravarAchado(rascunho))
+    setRascunho(RASCUNHO_VAZIO)
+  }
+
+  function salvar() {
+    if (editando === null || !rascunho.regiao) return
+    update(editando, gravarAchado(rascunho))
+    setRascunho(RASCUNHO_VAZIO)
+    setEditando(null)
+  }
+
+  function editar(index: number) {
+    const item = achados[index]
+    if (!item) return
+    setEditando(index)
+    setRascunho({
+      regiao: item.regiao ?? '',
+      buscaLocal: '',
+      local: item.local ?? '',
+      localOutro: item.localOutro ?? '',
+      lado: item.lado ?? '',
+      achados: item.tipos ?? [],
+      achadoOutro: item.achadoOutro ?? '',
+      dor: typeof item.dor === 'number' ? String(item.dor) : '',
+      observacao: item.observacao ?? '',
+    })
+  }
+
+  return (
+    <div className="space-y-5">
+      <SubSecao
+        numero={1}
+        icon={Hand}
+        titulo="Palpação"
+        descricao="O que você encontrou ao tocar: região, estrutura, lado, achado e dor."
+      >
+      <FormularioAchado
+        rascunho={rascunho}
+        setRascunho={setRascunho}
+        editando={editando !== null}
+        disabled={disabled}
+        onAdd={adicionar}
+        onSave={salvar}
+        onCancel={() => {
+          setRascunho(RASCUNHO_VAZIO)
+          setEditando(null)
+        }}
+      />
+      <TabelaAchados
+        achados={fields.map((field, index) => {
+          const item = achados[index] ?? field
+          return {
+            id: field.id,
+            regiao: item.regiao ?? '',
+            local: item.local ?? '',
+            localOutro: item.localOutro,
+            lado: item.lado,
+            tipos: item.tipos,
+            achadoOutro: item.achadoOutro,
+            dor: item.dor,
+            observacao: item.observacao,
+          }
+        })}
+        disabled={disabled}
+        onEdit={editar}
+        onAskRemove={setPendente}
+      />
+      <RegistroAnterior texto={typeof palpacaoRegistro === 'string' ? palpacaoRegistro : ''} />
+      </SubSecao>
+      <SubSecao
+        numero={2}
+        icon={ClipboardCheck}
+        titulo="Testes clínicos"
+        descricao="Testes especiais aplicados e o resultado de cada um."
+      >
+      <ListaTestes
+        register={register}
+        control={control}
+        disabled={disabled}
+        registroAnterior={typeof testesRegistro === 'string' ? testesRegistro : ''}
+      />
+      <TextField
+        label="Resultados relevantes dos testes"
+        name="ficha.avaliacaoPlano.palpacaoTestes.resultados"
+        register={register}
+        rows={2}
+        disabled={disabled}
+      />
+      </SubSecao>
+      <SubSecao
+        numero={3}
+        icon={Activity}
+        titulo="Testes funcionais"
+        descricao="Desempenho em tarefas: escolha a categoria, marque o teste e registre resultado, dor e qualidade."
+      >
+      <ListaFuncionais register={register} control={control} disabled={disabled} />
+      {/* Avaliações antigas: o texto livre de Função continua editável quando já tem conteúdo. */}
+      {funcaoLegada ? (
+        <>
+          <TextField
+            label="Teste funcional / medida de desempenho (registro anterior)"
+            name="ficha.avaliacaoPlano.palpacaoTestes.testeFuncional"
+            register={register}
+            rows={2}
+            disabled={disabled}
+          />
+          <TextField
+            label="Resultado inicial (registro anterior)"
+            name="ficha.avaliacaoPlano.palpacaoTestes.resultadoInicial"
+            register={register}
+            rows={2}
+            disabled={disabled}
+          />
+        </>
+      ) : null}
+      </SubSecao>
+      {!disabled ? (
+        <ConfirmDialog
+          open={pendente !== null}
+          title="Remover achado?"
+          description="Este achado sai da palpação. Esta ação não pode ser desfeita."
+          confirmLabel="Remover achado"
+          cancelLabel="Manter achado"
+          tone="danger"
+          onConfirm={() => {
+            if (pendente === null) return
+            remove(pendente)
+            if (editando === pendente) {
+              setRascunho(RASCUNHO_VAZIO)
+              setEditando(null)
+            } else if (editando !== null && editando > pendente) {
+              setEditando(editando - 1)
+            }
+            setPendente(null)
+          }}
+          onClose={() => setPendente(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Campo de texto com lista de sugestões própria (o <datalist> não abre no celular).
+ * Mostra todas ao tocar na seta; filtra conforme digita. Continua aceitando texto livre.
+ * A lista abre no fluxo (abaixo do campo), não flutuando: assim nenhum contêiner com overflow a corta.
+ */
+function CampoComSugestoes({
+  label,
+  value,
+  onChange,
+  onBlur,
+  sugestoes,
+  disabled,
+}: {
+  label: string
+  value: string
+  onChange: (next: string) => void
+  onBlur?: () => void
+  sugestoes: readonly string[]
+  disabled?: boolean
+}) {
+  const id = useId()
+  const listaId = useId()
+  const [aberto, setAberto] = useState(false)
+  const [filtrar, setFiltrar] = useState(false)
+  const termo = fold(value.trim())
+  const visiveis = filtrar && termo ? sugestoes.filter((item) => fold(item).includes(termo)) : sugestoes
+  const mostrar = aberto && visiveis.length > 0 && !disabled
+
+  return (
+    <div className="space-y-2">
+      <label htmlFor={id} className="block text-sm font-medium text-ink">
+        {label}
+      </label>
+      <div>
+      <div className="relative">
+        <input
+          id={id}
+          type="text"
+          role="combobox"
+          aria-expanded={mostrar}
+          aria-controls={listaId}
+          aria-autocomplete="list"
+          autoComplete="off"
+          disabled={disabled}
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value)
+            setFiltrar(true)
+            setAberto(true)
+          }}
+          onFocus={() => {
+            setFiltrar(false)
+            setAberto(true)
+          }}
+          onBlur={() => {
+            setAberto(false)
+            onBlur?.()
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setAberto(false)
+          }}
+          className="w-full rounded-2xl border border-line bg-canvas py-3.5 pl-4 pr-11 text-ink transition-colors duration-200 hover:border-forest/25 focus:border-accent focus:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/25"
+        />
+        {sugestoes.length > 0 && !disabled ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={aberto ? 'Fechar sugestões' : 'Ver sugestões'}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setFiltrar(false)
+              setAberto((atual) => !atual)
+              document.getElementById(id)?.focus()
+            }}
+            className="absolute inset-y-0 right-1 flex w-10 items-center justify-center text-muted hover:text-ink"
+          >
+            <ChevronDown
+              size={18}
+              aria-hidden
+              className={['transition-transform duration-200', mostrar ? 'rotate-180' : 'rotate-0'].join(' ')}
+            />
+          </button>
+        ) : null}
+      </div>
+        {mostrar ? (
+          <ul
+            id={listaId}
+            role="listbox"
+            className="mt-1 max-h-60 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface py-1 shadow-sm"
+          >
+            {visiveis.map((item) => (
+              <li
+                key={item}
+                role="option"
+                aria-selected={item === value}
+                // mousedown: escolhe antes do blur do campo fechar a lista (vale para toque também).
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  onChange(item)
+                  setAberto(false)
+                }}
+                className={[
+                  'flex min-h-11 cursor-pointer items-center px-4 text-sm transition-colors hover:bg-accent-soft',
+                  item === value ? 'font-semibold text-forest' : 'text-ink',
+                ].join(' ')}
+              >
+                {item}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ForcaTable({
+  register,
+  control,
+  disabled,
+}: {
+  register: UseFormRegister<EvaluationFormData>
+  control: Control<EvaluationFormData>
+  disabled?: boolean
+}) {
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'ficha.avaliacaoPlano.forca.linhas',
+  })
+  const listaId = useId()
+  const grupos = agruparForca(fields)
+  const usadas = new Set(grupos.map((grupo) => grupo.regiao))
+  const livres = FORCA_REGIOES.filter((regiao) => !usadas.has(regiao.label))
+  // Regiões recolhidas (só visual; as linhas continuam na ficha).
+  const [recolhidas, setRecolhidas] = useState<ReadonlySet<string>>(() => new Set())
+
+  function alternarRegiao(chave: string) {
+    setRecolhidas((atual) => {
+      const proximo = new Set(atual)
+      if (proximo.has(chave)) proximo.delete(chave)
+      else proximo.add(chave)
+      return proximo
+    })
+  }
+
+  function adicionar(regiao: string) {
+    append({ regiao, grupo: '', direito: '', esquerdo: '', dor: '', observacao: '' })
+    setRecolhidas((atual) => {
+      if (!atual.has(regiao)) return atual
+      const proximo = new Set(atual)
+      proximo.delete(regiao)
+      return proximo
+    })
+  }
+
+  return (
+    <div className="space-y-4">
+      {grupos.map((grupo) => {
+        const sugestoes = sugestoesForca(grupo.regiao)
+        const nomeRegiao = grupo.regiao || 'Sem região'
+        const aberta = !recolhidas.has(grupo.regiao)
+        const painelId = `${listaId}-painel-${grupo.regiao || 'sem-regiao'}`
+        return (
+          <section key={grupo.regiao || 'sem-regiao'} className="rounded-xl border border-line p-3">
+            <h4>
+              <button
+                type="button"
+                aria-expanded={aberta}
+                aria-controls={painelId}
+                onClick={() => alternarRegiao(grupo.regiao)}
+                className="-m-1 flex min-h-10 w-[calc(100%+0.5rem)] items-center gap-2 rounded-lg p-1 text-left text-sm font-semibold text-ink transition-colors hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/25"
+              >
+                <ChevronDown
+                  size={18}
+                  aria-hidden
+                  className={[
+                    'shrink-0 text-forest transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                    aberta ? 'rotate-0' : '-rotate-90',
+                  ].join(' ')}
+                />
+                <span className="min-w-0 flex-1">{nomeRegiao}</span>
+                <span className="text-xs font-normal text-muted">
+                  {grupo.linhas.length === 1 ? '1 linha' : `${grupo.linhas.length} linhas`}
+                </span>
+              </button>
+            </h4>
+            <div
+              id={painelId}
+              inert={aberta ? undefined : true}
+              className={[
+                'grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                aberta ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+              ].join(' ')}
+            >
+            <div className="min-h-0 overflow-hidden">
+            <div className="space-y-3 pt-3">
+            {grupo.linhas.map(({ linha, index }, posicao) => (
+              <div
+                key={linha.id}
+                className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_repeat(4,minmax(0,1fr))_auto]"
+              >
+                <Controller
+                  control={control}
+                  name={`ficha.avaliacaoPlano.forca.linhas.${index}.grupo`}
+                  render={({ field }) => (
+                    <CampoComSugestoes
+                      label={`Movimento / grupo ${posicao + 1}`}
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                      sugestoes={sugestoes}
+                      disabled={disabled}
+                    />
+                  )}
+                />
+                <Input
+                  label="Direito"
+                  disabled={disabled}
+                  {...register(`ficha.avaliacaoPlano.forca.linhas.${index}.direito`)}
+                />
+                <Input
+                  label="Esquerdo"
+                  disabled={disabled}
+                  {...register(`ficha.avaliacaoPlano.forca.linhas.${index}.esquerdo`)}
+                />
+                <Input
+                  label="Dor"
+                  disabled={disabled}
+                  {...register(`ficha.avaliacaoPlano.forca.linhas.${index}.dor`)}
+                />
+                <Input
+                  label="Observação"
+                  disabled={disabled}
+                  {...register(`ficha.avaliacaoPlano.forca.linhas.${index}.observacao`)}
+                />
+                {!disabled ? (
+                  <button
+                    type="button"
+                    aria-label={`Remover linha ${posicao + 1} de ${grupo.regiao || 'sem região'}`}
+                    className="inline-flex min-h-11 items-center justify-center text-sm text-muted hover:text-error sm:mt-7"
+                    onClick={() => remove(index)}
+                  >
+                    Remover
+                  </button>
+                ) : (
+                  <span />
+                )}
+              </div>
+            ))}
+            {!disabled && grupo.regiao ? (
+              <button
+                type="button"
+                onClick={() => adicionar(grupo.regiao)}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-forest hover:bg-accent-soft"
+              >
+                <Plus size={15} aria-hidden />
+                Adicionar em {grupo.regiao}
+              </button>
+            ) : null}
+            </div>
+            </div>
+            </div>
+          </section>
+        )
+      })}
+      {!disabled && livres.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted">
+            {grupos.length === 0 ? 'Escolha a região para registrar a força:' : 'Adicionar outra região:'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {livres.map((regiao) => (
+              <button
+                key={regiao.label}
+                type="button"
+                onClick={() => adicionar(regiao.label)}
+                className="inline-flex min-h-10 items-center gap-1 rounded-full border border-line bg-surface px-3 text-sm text-ink transition hover:border-forest/30 hover:bg-accent-soft"
+              >
+                <Plus size={14} aria-hidden />
+                {regiao.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function EvaluationPage04({ register, watch, setValue, control, readOnly }: PageProps) {
+  const disabled = readOnly
+
+  return (
+    <div className="space-y-4">
+      <FichaBlock letter="A" title="Inspeção / observação">
+        <CheckboxGrid>
+          <BoolCheck label="Marcha" name="ficha.avaliacaoPlano.inspecao.marcha" register={register} disabled={disabled} />
+          <BoolCheck label="Postura / posição espontânea" name="ficha.avaliacaoPlano.inspecao.postura" register={register} disabled={disabled} />
+          <BoolCheck label="Edema" name="ficha.avaliacaoPlano.inspecao.edema" register={register} disabled={disabled} />
+          <BoolCheck label="Equimose" name="ficha.avaliacaoPlano.inspecao.equimose" register={register} disabled={disabled} />
+          <BoolCheck label="Atrofia aparente" name="ficha.avaliacaoPlano.inspecao.atrofia" register={register} disabled={disabled} />
+          <BoolCheck label="Assimetria funcional" name="ficha.avaliacaoPlano.inspecao.assimetria" register={register} disabled={disabled} />
+          <BoolCheck label="Compensações" name="ficha.avaliacaoPlano.inspecao.compensacoes" register={register} disabled={disabled} />
+          <BoolCheck label="Outro" name="ficha.avaliacaoPlano.inspecao.outro" register={register} disabled={disabled} />
+        </CheckboxGrid>
+        {watch('ficha.avaliacaoPlano.inspecao.outro') ? (
+          <LineField label="Outro (detalhe)" name="ficha.avaliacaoPlano.inspecao.outroDetalhe" register={register} disabled={disabled} />
+        ) : null}
+        <TextField label="Achados" name="ficha.avaliacaoPlano.inspecao.achados" register={register} rows={3} disabled={disabled} />
+      </FichaBlock>
+
+      <FichaBlock letter="B" title="Mobilidade">
+        <MobilidadeRegioes
+          register={register}
+          watch={watch}
+          setValue={setValue}
+          control={control}
+          disabled={disabled}
+        />
+      </FichaBlock>
+
+      <FichaBlock letter="C" title="Força">
+        <ForcaTable register={register} control={control} disabled={disabled} />
+      </FichaBlock>
+
+      <FichaBlock letter="D" title="Avaliação neurológica (se indicada)">
+        <CheckboxGrid>
+          <BoolCheck label="Sensibilidade" name="ficha.avaliacaoPlano.neurologico.sensibilidade" register={register} disabled={disabled} />
+          <BoolCheck label="Miótomos" name="ficha.avaliacaoPlano.neurologico.miotomos" register={register} disabled={disabled} />
+          <BoolCheck label="Reflexos" name="ficha.avaliacaoPlano.neurologico.reflexos" register={register} disabled={disabled} />
+          <BoolCheck label="Neurodinâmica" name="ficha.avaliacaoPlano.neurologico.neurodinamica" register={register} disabled={disabled} />
+          <BoolCheck label="Coordenação" name="ficha.avaliacaoPlano.neurologico.coordenacao" register={register} disabled={disabled} />
+          <BoolCheck label="Outro" name="ficha.avaliacaoPlano.neurologico.outro" register={register} disabled={disabled} />
+        </CheckboxGrid>
+        {watch('ficha.avaliacaoPlano.neurologico.outro') ? (
+          <LineField label="Outro (detalhe)" name="ficha.avaliacaoPlano.neurologico.outroDetalhe" register={register} disabled={disabled} />
+        ) : null}
+        <TextField label="Achados" name="ficha.avaliacaoPlano.neurologico.achados" register={register} rows={3} disabled={disabled} />
+      </FichaBlock>
+
+      <FichaBlock letter="E" title="Palpação, testes e função">
+        <PalpacaoBloco register={register} watch={watch} control={control} disabled={disabled} />
+      </FichaBlock>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <FichaBlock letter="F" title="Síntese dos principais achados">
+          <TextField label="Problema 1" name="ficha.avaliacaoPlano.sintese.problema1" register={register} rows={2} disabled={disabled} />
+          <TextField label="Problema 2" name="ficha.avaliacaoPlano.sintese.problema2" register={register} rows={2} disabled={disabled} />
+          <TextField label="Problema 3" name="ficha.avaliacaoPlano.sintese.problema3" register={register} rows={2} disabled={disabled} />
+          <TextField label="Diagnóstico fisioterapêutico / síntese funcional" name="ficha.avaliacaoPlano.sintese.diagnosticoFisio" register={register} rows={3} disabled={disabled} />
+          <TextField label="Prognóstico fisioterapêutico" name="ficha.avaliacaoPlano.sintese.prognostico" register={register} rows={3} disabled={disabled} />
+        </FichaBlock>
+
+        <FichaBlock letter="G" title="Objetivos">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">Curto prazo</p>
+          <TextField label="1" name="ficha.avaliacaoPlano.objetivos.curto1" register={register} rows={2} disabled={disabled} />
+          <TextField label="2" name="ficha.avaliacaoPlano.objetivos.curto2" register={register} rows={2} disabled={disabled} />
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">Médio / longo prazo</p>
+          <TextField label="1" name="ficha.avaliacaoPlano.objetivos.medioLongo1" register={register} rows={2} disabled={disabled} />
+          <TextField label="2" name="ficha.avaliacaoPlano.objetivos.medioLongo2" register={register} rows={2} disabled={disabled} />
+        </FichaBlock>
+      </div>
+
+      <FichaBlock letter="H" title="Planejamento">
+        <CheckboxGrid>
+          <BoolCheck label="Educação / orientações" name="ficha.avaliacaoPlano.planejamento.educacao" register={register} disabled={disabled} />
+          <BoolCheck label="Exercício terapêutico" name="ficha.avaliacaoPlano.planejamento.exercicioTerapeutico" register={register} disabled={disabled} />
+          <BoolCheck label="Treino funcional" name="ficha.avaliacaoPlano.planejamento.treinoFuncional" register={register} disabled={disabled} />
+          <BoolCheck label="Terapia manual quando indicada" name="ficha.avaliacaoPlano.planejamento.terapiaManual" register={register} disabled={disabled} />
+          <BoolCheck label="Exposição / progressão de carga" name="ficha.avaliacaoPlano.planejamento.exposicaoCarga" register={register} disabled={disabled} />
+          <BoolCheck label="Estratégias de autocuidado" name="ficha.avaliacaoPlano.planejamento.autocuidado" register={register} disabled={disabled} />
+          <BoolCheck label="Outro" name="ficha.avaliacaoPlano.planejamento.outro" register={register} disabled={disabled} />
+        </CheckboxGrid>
+        {watch('ficha.avaliacaoPlano.planejamento.outro') ? (
+          <LineField label="Outro (detalhe)" name="ficha.avaliacaoPlano.planejamento.outroDetalhe" register={register} disabled={disabled} />
+        ) : null}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <LineField label="Frequência estimada" name="ficha.avaliacaoPlano.planejamento.frequencia" register={register} disabled={disabled} />
+          <LineField label="Quantidade inicial de atendimentos" name="ficha.avaliacaoPlano.planejamento.qtdAtendimentos" register={register} disabled={disabled} />
+        </div>
+        <TextField label="Critérios para progressão" name="ficha.avaliacaoPlano.planejamento.criteriosProgressao" register={register} rows={2} disabled={disabled} />
+        <TextField label="Critérios para reavaliação" name="ficha.avaliacaoPlano.planejamento.criteriosReavaliacao" register={register} rows={2} disabled={disabled} />
+        <RadioRow
+          legend="Necessidade de encaminhamento / comunicação com outro profissional?"
+          name="ficha.avaliacaoPlano.planejamento.encaminhamento"
+          register={register}
+          disabled={disabled}
+          options={[
+            { value: 'nao', label: 'Não' },
+            { value: 'sim', label: 'Sim' },
+          ]}
+        />
+        {watch('ficha.avaliacaoPlano.planejamento.encaminhamento') === 'sim' ? (
+          <TextField
+            label="Encaminhamento (detalhe)"
+            name="ficha.avaliacaoPlano.planejamento.encaminhamentoDetalhe"
+            register={register}
+            rows={2}
+            disabled={disabled}
+          />
+        ) : null}
+      </FichaBlock>
+
+      <FichaBlock letter="ID" title="Identificação profissional">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <LineField label="Fisioterapeuta" name="ficha.avaliacaoPlano.profissional.fisioterapeuta" register={register} disabled={disabled} />
+          <LineField label="CREFITO" name="ficha.avaliacaoPlano.profissional.crefito" register={register} disabled={disabled} />
+          <LineField label="Data" name="ficha.avaliacaoPlano.profissional.data" register={register} disabled={disabled} />
+          <div className="sm:col-span-2">
+            <SignaturePad
+              label="Assinatura do Profissional"
+              value={watch('ficha.avaliacaoPlano.profissional.assinaturaTraco')}
+              legacyText={watch('ficha.avaliacaoPlano.profissional.assinatura')}
+              disabled={disabled}
+              onChange={(next) => {
+                setValue('ficha.avaliacaoPlano.profissional.assinaturaTraco', next, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                })
+                if (next && watch('ficha.avaliacaoPlano.profissional.assinatura')?.trim()) {
+                  setValue('ficha.avaliacaoPlano.profissional.assinatura', '', {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
+              }}
+            />
+          </div>
+        </div>
+      </FichaBlock>
+    </div>
+  )
+}

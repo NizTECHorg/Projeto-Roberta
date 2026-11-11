@@ -1,0 +1,552 @@
+import { useEffect, useMemo, useState } from 'react'
+import { Info } from 'lucide-react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
+import { Textarea } from '@/components/ui/Textarea'
+import { EvolucaoDitado } from '@/components/patients/EvolucaoDitado'
+import { RascunhoAviso } from '@/components/patients/RascunhoAviso'
+import { useRascunhoForm } from '@/hooks/useRascunhoForm'
+import { RASCUNHO_NOVO } from '@/lib/rascunhosLocais'
+import { useAuth } from '@/hooks/useAuth'
+import { useFinancePrices, useSessionCharge } from '@/hooks/useFinance'
+import {
+  useActiveTherapists,
+  useCreatePatientSession,
+  useUpdatePatientSession,
+} from '@/hooks/usePatients'
+import { parseBrlInput } from '@/schemas/finance.schema'
+import { sessionFormSchema, type SessionFormData } from '@/schemas/patient.schema'
+import { canSeeFinance } from '@/lib/accountAccess'
+import { formatCurrency } from '@/lib/security'
+import type { SessionCharge, SessionChargeDraft } from '@/types/finance'
+import type { CamposEvolucaoDitados } from '@/services/ai.service'
+import type { ToastAction } from '@/stores/toast.store'
+import type { PatientSessionRecord } from '@/types/patient'
+
+const emptyFinanceFields = {
+  priceId: '',
+  adHocAmount: '',
+  isPaid: false,
+}
+
+function toDatetimeLocalValue(iso: string) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function fromDatetimeLocalValue(value: string) {
+  return new Date(value).toISOString()
+}
+
+function defaultScheduledLocal() {
+  const date = new Date()
+  date.setMinutes(0, 0, 0)
+  date.setHours(date.getHours() + 1)
+  return toDatetimeLocalValue(date.toISOString())
+}
+
+function financeFieldsFromCharge(charge: SessionCharge | null | undefined) {
+  if (!charge) return emptyFinanceFields
+  if (charge.priceName === 'Avulso') {
+    return {
+      priceId: '',
+      adHocAmount: charge.amountBrl.toFixed(2).replace('.', ','),
+      isPaid: charge.isPaid,
+    }
+  }
+  return {
+    priceId: charge.priceId ?? '',
+    adHocAmount: '',
+    isPaid: charge.isPaid,
+  }
+}
+
+type PatientSessionEditorFormProps = {
+  patientId: string
+  cancelLabel: string
+  submitLabel: string
+  successAction?: ToastAction
+  errorMessage?: string
+  editing?: PatientSessionRecord | null
+  /** Evolução já separada por campo (gravação por voz) para uma sessão NOVA já realizada. */
+  draftCampos?: CamposEvolucaoDitados | null
+  onCancel: () => void
+  onSuccess: () => void
+}
+
+export function PatientSessionEditorForm({
+  patientId,
+  cancelLabel,
+  submitLabel,
+  successAction,
+  errorMessage,
+  editing,
+  draftCampos,
+  onCancel,
+  onSuccess,
+}: PatientSessionEditorFormProps) {
+  const { user, profile } = useAuth()
+  const showFinance = canSeeFinance(profile?.accountType)
+  const { data: therapists = [] } = useActiveTherapists()
+  const { data: prices = [], isLoading: pricesLoading } = useFinancePrices()
+  const { data: charge } = useSessionCharge(showFinance ? editing?.id : undefined)
+  const createSession = useCreatePatientSession(patientId, {
+    action: successAction,
+    errorMessage,
+  })
+  const updateSession = useUpdatePatientSession(patientId)
+
+  const defaultTherapistId = useMemo(() => {
+    if (user?.id && therapists.some((item) => item.id === user.id)) {
+      return user.id
+    }
+    return therapists[0]?.id ?? ''
+  }, [therapists, user?.id])
+
+  const therapistOptions = useMemo(
+    () => [
+      { value: '', label: 'Selecione o profissional…' },
+      ...therapists.map((item) => ({ value: item.id, label: item.fullName })),
+    ],
+    [therapists],
+  )
+
+  const catalogOptions = useMemo(
+    () => [
+      { value: '', label: 'Sem valor' },
+      ...prices.map((item) => ({
+        value: item.id,
+        label: `${item.name} — ${formatCurrency(item.amountBrl)}`,
+      })),
+    ],
+    [prices],
+  )
+
+  const form = useForm<SessionFormData>({
+    resolver: zodResolver(sessionFormSchema),
+    defaultValues: {
+      mode: 'agendar',
+      scheduledAt: defaultScheduledLocal(),
+      sessionType: 'Sessão',
+      place: '',
+      therapistId: '',
+      patientState: '',
+      changesSinceLast: '',
+      conducts: '',
+      treatmentResponse: '',
+      sideEffects: '',
+      incidents: '',
+      nextPlan: '',
+      ...emptyFinanceFields,
+    },
+  })
+
+  // Rascunho automático: sair sem salvar não perde o que foi preenchido.
+  const rascunho = useRascunhoForm({
+    form,
+    patientId,
+    tipo: 'sessao',
+    registroId: editing?.id ?? RASCUNHO_NOVO,
+    recuperar: !draftCampos,
+  })
+  const { restaurado, limpar: limparRascunho, guardarAgora } = rascunho
+
+  const mode = form.watch('mode')
+  const priceId = form.watch('priceId')
+  const selectValue = prices.some((item) => item.id === priceId) ? priceId : ''
+
+  useEffect(() => {
+    const finance = editing && showFinance ? financeFieldsFromCharge(charge) : emptyFinanceFields
+    // Este efeito roda de novo quando profissionais e valor chegam: o rascunho entra sempre por cima.
+    const aplicar = (base: SessionFormData) => {
+      form.reset(base)
+      if (restaurado) form.reset({ ...base, ...restaurado.valores }, { keepDefaultValues: true })
+    }
+    if (editing) {
+      aplicar({
+        mode: editing.status === 'realizada' ? 'realizada' : 'agendar',
+        scheduledAt: toDatetimeLocalValue(editing.scheduledAt),
+        sessionType: editing.type || 'Sessão',
+        place: editing.place === '—' ? '' : editing.place,
+        therapistId: editing.therapistId || defaultTherapistId,
+        patientState: editing.evolution?.patientState ?? '',
+        changesSinceLast: editing.evolution?.changesSinceLast ?? '',
+        conducts: editing.evolution?.conducts ?? '',
+        treatmentResponse: editing.evolution?.treatmentResponse ?? '',
+        sideEffects: editing.evolution?.sideEffects ?? '',
+        incidents: editing.evolution?.incidents ?? '',
+        nextPlan: editing.evolution?.nextPlan ?? '',
+        ...finance,
+      })
+      return
+    }
+    aplicar({
+      mode: draftCampos ? 'realizada' : 'agendar',
+      scheduledAt: defaultScheduledLocal(),
+      sessionType: 'Sessão',
+      place: '',
+      therapistId: defaultTherapistId,
+      patientState: draftCampos?.patientState ?? '',
+      changesSinceLast: draftCampos?.changesSinceLast ?? '',
+      conducts: draftCampos?.conducts ?? '',
+      treatmentResponse: draftCampos?.treatmentResponse ?? '',
+      sideEffects: draftCampos?.sideEffects ?? '',
+      incidents: draftCampos?.incidents ?? '',
+      nextPlan: draftCampos?.nextPlan ?? '',
+      ...emptyFinanceFields,
+    })
+  }, [editing, draftCampos, form, defaultTherapistId, charge, showFinance, restaurado])
+
+  // Evolução vinda da gravação: fechar o formulário sem salvar não pode perder o áudio processado.
+  useEffect(() => {
+    if (draftCampos) guardarAgora()
+  }, [draftCampos, guardarAgora])
+
+  const [finalizeError, setFinalizeError] = useState<string | null>(null)
+
+  function aoSalvar() {
+    limparRascunho()
+    onSuccess()
+  }
+
+  function onSubmit(values: SessionFormData, finalizar: boolean) {
+    const temEvolucao = [
+      values.patientState,
+      values.changesSinceLast,
+      values.conducts,
+      values.treatmentResponse,
+      values.sideEffects,
+      values.incidents,
+      values.nextPlan,
+    ].some((value) => (value?.trim() ?? '') !== '')
+    if (finalizar && !temEvolucao) {
+      setFinalizeError('Escreva a evolução antes de finalizar, ou salve como rascunho.')
+      return
+    }
+    setFinalizeError(null)
+    const finalizadaAntes = editing?.evolution?.finalizedAt ?? null
+    // Agendar não mexe na situação; Realizada: rascunho volta a null, finalizar mantém a data original.
+    const finalizedAt =
+      values.mode === 'realizada'
+        ? finalizar
+          ? (finalizadaAntes ?? new Date().toISOString())
+          : null
+        : finalizadaAntes
+    const therapist = therapists.find((item) => item.id === values.therapistId)
+    const input = {
+      mode: values.mode,
+      scheduledAt: fromDatetimeLocalValue(values.scheduledAt),
+      sessionType: values.sessionType,
+      place: values.place,
+      therapistId: therapist?.id ?? (values.therapistId || null),
+      therapistName: therapist?.fullName ?? profile?.fullName ?? '',
+      patientState: values.patientState,
+      changesSinceLast: values.changesSinceLast,
+      conducts: values.conducts,
+      treatmentResponse: values.treatmentResponse,
+      sideEffects: values.sideEffects,
+      incidents: values.incidents,
+      nextPlan: values.nextPlan,
+      finalizedAt,
+    }
+
+    const chargeDraft: SessionChargeDraft = {
+      priceId: values.priceId || null,
+      adHocAmountBrl: parseBrlInput(values.adHocAmount),
+      isPaid: values.isPaid,
+    }
+
+    if (editing) {
+      if (showFinance) {
+        updateSession.mutate(
+          {
+            sessionId: editing.id,
+            input,
+            evolutionId: editing.evolution?.id ?? null,
+            charge: chargeDraft,
+          },
+          { onSuccess: aoSalvar },
+        )
+        return
+      }
+      updateSession.mutate(
+        {
+          sessionId: editing.id,
+          input,
+          evolutionId: editing.evolution?.id ?? null,
+        },
+        { onSuccess: aoSalvar },
+      )
+      return
+    }
+
+    if (showFinance) {
+      createSession.mutate({ ...input, charge: chargeDraft }, { onSuccess: aoSalvar })
+      return
+    }
+
+    createSession.mutate(input, { onSuccess: aoSalvar })
+  }
+
+  const saving = createSession.isPending || updateSession.isPending
+  const hasRequiredErrors = Boolean(
+    form.formState.errors.scheduledAt ||
+      form.formState.errors.therapistId ||
+      form.formState.errors.sessionType,
+  )
+
+  return (
+    <form className="space-y-4" onSubmit={form.handleSubmit((values) => onSubmit(values, false))}>
+      {restaurado ? (
+        <RascunhoAviso
+          salvoEm={restaurado.salvoEm}
+          texto="Recuperamos o que você não tinha salvo."
+          onDescartar={limparRascunho}
+        />
+      ) : null}
+      <div className="rounded-2xl border border-line bg-surface px-4 py-3">
+        <p className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <Info size={16} aria-hidden className="shrink-0 text-muted" />
+          Registro de evolução profissional
+        </p>
+        <p className="mt-1 text-sm leading-relaxed text-muted">
+          O registro da evolução fisioterapêutica no prontuário é uma obrigação profissional, conforme as normas
+          do Sistema COFFITO/CREFITOs. Mantenha as informações clínicas de cada atendimento devidamente
+          documentadas.
+        </p>
+      </div>
+
+      <div className="inline-flex rounded-xl border border-line bg-canvas p-1">
+        <button
+          type="button"
+          onClick={() => form.setValue('mode', 'agendar', { shouldValidate: true })}
+          className={[
+            'min-h-11 rounded-lg px-3 text-sm font-medium transition',
+            mode === 'agendar' ? 'bg-forest text-white' : 'text-muted hover:text-ink',
+          ].join(' ')}
+        >
+          Agendar
+        </button>
+        <button
+          type="button"
+          onClick={() => form.setValue('mode', 'realizada', { shouldValidate: true })}
+          className={[
+            'min-h-11 rounded-lg px-3 text-sm font-medium transition',
+            mode === 'realizada' ? 'bg-forest text-white' : 'text-muted hover:text-ink',
+          ].join(' ')}
+        >
+          Realizada
+        </button>
+      </div>
+
+      <Input
+        label="Data e horário"
+        requiredMark
+        type="datetime-local"
+        error={form.formState.errors.scheduledAt?.message}
+        {...form.register('scheduledAt')}
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Select
+          label="Profissional"
+          requiredMark
+          options={therapistOptions}
+          error={form.formState.errors.therapistId?.message}
+          {...form.register('therapistId')}
+        />
+        <Input
+          label="Tipo"
+          requiredMark
+          placeholder="Ex.: Sessão, Retorno, Avaliação"
+          error={form.formState.errors.sessionType?.message}
+          {...form.register('sessionType')}
+        />
+        <Input
+          label="Local"
+          placeholder="Ex.: Consultório 1, Domiciliar"
+          error={form.formState.errors.place?.message}
+          {...form.register('place')}
+        />
+      </div>
+
+      {showFinance ? (
+        <div className="space-y-4">
+          <p className="text-sm font-semibold text-ink">Valor da consulta</p>
+          <input type="hidden" {...form.register('priceId')} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            {!pricesLoading && prices.length > 0 ? (
+              <Select
+                label="Preço do catálogo"
+                options={catalogOptions}
+                value={selectValue}
+                onChange={(event) => {
+                  const next = event.target.value
+                  form.setValue('priceId', next, { shouldValidate: true })
+                  if (next) {
+                    form.setValue('adHocAmount', '', { shouldValidate: true })
+                  }
+                }}
+              />
+            ) : null}
+            {!pricesLoading && prices.length === 0 ? (
+              <p className="text-sm text-muted">
+                Nenhum preço ativo no catálogo. Informe um valor avulso ou cadastre um preço em
+                Financeiro.
+              </p>
+            ) : null}
+            <Input
+              label="Valor avulso (R$)"
+              placeholder="0,00"
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              error={form.formState.errors.adHocAmount?.message}
+              {...form.register('adHocAmount', {
+                onChange: () => {
+                  form.setValue('priceId', '', { shouldValidate: true })
+                },
+              })}
+            />
+          </div>
+          <div>
+            <label className="flex min-h-11 items-center gap-2 text-sm text-ink">
+              <input type="checkbox" className="accent-forest" {...form.register('isPaid')} />
+              Pago
+            </label>
+            <p className="text-xs text-muted">
+              {mode === 'agendar'
+                ? 'Se estiver pago, o valor entra nos totais mesmo com a sessão só agendada.'
+                : 'Se estiver pago, o valor entra nos totais do mês, do ano e do acumulado.'}
+            </p>
+            {form.formState.errors.isPaid?.message ? (
+              <p role="alert" className="text-xs text-error">
+                {form.formState.errors.isPaid.message}
+              </p>
+            ) : null}
+          </div>
+          {editing && charge ? (
+            <p className="text-xs text-muted">
+              Valor gravado: {charge.priceName} · {formatCurrency(charge.amountBrl)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="space-y-4 border-t border-line pt-4">
+        <p className="text-sm text-muted">
+          Todos os campos da evolução abaixo são <span className="font-medium text-ink">opcionais</span>. Dá para{' '}
+          <span className="font-medium text-ink">salvar como rascunho</span> sem texto e finalizar depois.
+        </p>
+        <EvolucaoDitado
+          patientId={patientId}
+          disabled={saving}
+          onCampos={(campos) => {
+            // Junta ao que já está escrito (nada é apagado) e marca a sessão como realizada.
+            for (const [chave, texto] of Object.entries(campos)) {
+              const nome = chave as keyof typeof campos
+              const atual = (form.getValues(nome) ?? '').trim()
+              form.setValue(nome, atual ? `${atual}\n${texto}` : (texto ?? ''), { shouldDirty: true })
+            }
+            if (form.getValues('mode') !== 'realizada') form.setValue('mode', 'realizada', { shouldDirty: true })
+          }}
+        />
+        <Textarea
+          label="Estado do paciente"
+          placeholder="Ex.: chegou com dor 6/10 no joelho direito, mais disposto que na última sessão"
+          rows={3}
+          error={form.formState.errors.patientState?.message}
+          {...form.register('patientState')}
+        />
+        <Textarea
+          label="Condutas realizadas"
+          placeholder="Ex.: mobilização patelar, agachamento 3x12, bicicleta 10 min, gelo 15 min"
+          rows={3}
+          error={form.formState.errors.conducts?.message}
+          {...form.register('conducts')}
+        />
+        <Textarea
+          label="Mudanças desde a última sessão"
+          placeholder="Ex.: voltou a subir escada sem apoio; dor noturna diminuiu"
+          rows={2}
+          error={form.formState.errors.changesSinceLast?.message}
+          {...form.register('changesSinceLast')}
+        />
+        <Textarea
+          label="Resposta ao tratamento"
+          placeholder="Ex.: boa tolerância aos exercícios, dor caiu para 3/10 ao final"
+          rows={2}
+          error={form.formState.errors.treatmentResponse?.message}
+          {...form.register('treatmentResponse')}
+        />
+        <Textarea
+          label="Efeitos colaterais"
+          rows={2}
+          placeholder="Ex.: dor tardia, vermelhidão, tontura após a sessão"
+          error={form.formState.errors.sideEffects?.message}
+          {...form.register('sideEffects')}
+        />
+        <Textarea
+          label="Intercorrências"
+          placeholder="Ex.: sessão interrompida por tontura; atraso de 15 min"
+          rows={2}
+          error={form.formState.errors.incidents?.message}
+          {...form.register('incidents')}
+        />
+        <Textarea
+          label="Planejamento"
+          placeholder="Ex.: progredir carga no agachamento; orientar exercícios em casa"
+          rows={2}
+          error={form.formState.errors.nextPlan?.message}
+          {...form.register('nextPlan')}
+        />
+      </div>
+
+      {hasRequiredErrors ? (
+        <div role="alert" className="rounded-xl border border-error/30 bg-error/10 px-3.5 py-2.5 text-xs text-error">
+          <p className="font-semibold">Atenção — preencha os campos obrigatórios para salvar:</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {form.formState.errors.scheduledAt ? <li>Data e horário</li> : null}
+            {form.formState.errors.therapistId ? <li>Profissional</li> : null}
+            {form.formState.errors.sessionType ? <li>Tipo da sessão</li> : null}
+          </ul>
+        </div>
+      ) : null}
+
+      {finalizeError ? (
+        <p role="alert" className="text-sm text-error">
+          {finalizeError}
+        </p>
+      ) : null}
+
+      <div className="flex flex-col-reverse gap-3 pt-1 sm:flex-row sm:justify-end">
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={saving}>
+          {cancelLabel}
+        </Button>
+        {mode === 'realizada' ? (
+          <>
+            <Button type="submit" variant="secondary" isLoading={saving}>
+              Salvar rascunho
+            </Button>
+            <Button
+              type="button"
+              disabled={saving}
+              onClick={form.handleSubmit((values) => onSubmit(values, true))}
+            >
+              Finalizar evolução
+            </Button>
+          </>
+        ) : (
+          <Button type="submit" isLoading={saving}>
+            {submitLabel}
+          </Button>
+        )}
+      </div>
+    </form>
+  )
+}

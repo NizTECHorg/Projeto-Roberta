@@ -1,0 +1,152 @@
+import { test } from 'node:test'
+import { deepEqual, equal } from 'node:assert/strict'
+import {
+  BODY_DRAWING_COLORS,
+  BODY_DRAWING_MAX_STROKES,
+  BODY_DRAWING_OUTRO_PADRAO,
+  BODY_DRAWING_VIEWBOX,
+  infoDaCor,
+  BODY_DRAWING_VIEWBOX_V2,
+  bodyDrawingVersion,
+  bodyDrawingViewBox,
+  appendBodyStroke,
+  bodyClientToViewBox,
+  bodyDrawingFigure,
+  bodyDrawingWidth,
+  bodyStrokeToPath,
+  isSafeBodyPath,
+  safeBodyStrokes,
+  simplifyBodyStroke,
+  usedBodyDrawingColors,
+} from './bodyDrawing.ts'
+
+test('mapa de sintomas: 6 cores com rótulo e dica, chaves únicas', () => {
+  equal(BODY_DRAWING_COLORS.length, 6)
+  equal(new Set(BODY_DRAWING_COLORS.map((item) => item.key)).size, 6)
+  for (const item of BODY_DRAWING_COLORS) {
+    equal(/^#[0-9a-f]{6}$/.test(item.hex), true)
+    equal(item.label.length > 0 && item.hint.length > 0, true)
+  }
+})
+
+test('mapa de sintomas: ponteiro vira coordenada inteira presa ao viewBox', () => {
+  const rect = { left: 10, top: 20, width: 635.5, height: 619 }
+  deepEqual(bodyClientToViewBox(10, 20, rect), { x: 0, y: 0 })
+  deepEqual(bodyClientToViewBox(645.5, 639, rect), { x: BODY_DRAWING_VIEWBOX.width, y: BODY_DRAWING_VIEWBOX.height })
+  deepEqual(bodyClientToViewBox(-50, 9999, rect), { x: 0, y: BODY_DRAWING_VIEWBOX.height })
+})
+
+test('mapa de sintomas: simplifica pontos próximos e monta o path', () => {
+  const pts = simplifyBodyStroke([
+    { x: 10, y: 10 },
+    { x: 11, y: 10 },
+    { x: 20, y: 10 },
+  ])
+  deepEqual(pts, [
+    { x: 10, y: 10 },
+    { x: 20, y: 10 },
+  ])
+  equal(bodyStrokeToPath(pts), 'M10 10 L20 10')
+  equal(bodyStrokeToPath([{ x: 5, y: 6 }]), 'M5 6 L5.5 6')
+  equal(bodyStrokeToPath([]), '')
+})
+
+test('mapa de sintomas: path só aceita M, L, números, espaço, ponto e hífen', () => {
+  equal(isSafeBodyPath('M1 2 L3 4'), true)
+  equal(isSafeBodyPath('M1 2 Z'), false)
+  equal(isSafeBodyPath('<script>'), false)
+  equal(isSafeBodyPath(''), false)
+  equal(isSafeBodyPath(42), false)
+})
+
+test('mapa de sintomas: safeBodyStrokes descarta cor desconhecida e path inseguro', () => {
+  deepEqual(
+    safeBodyStrokes([
+      { cor: 'dor', d: 'M1 1 L2 2' },
+      { cor: 'roxo', d: 'M1 1 L2 2' },
+      { cor: 'dor', d: 'javascript:1' },
+      null,
+    ]),
+    [{ cor: 'dor', d: 'M1 1 L2 2', espessura: 'media' }],
+  )
+  deepEqual(safeBodyStrokes('nada'), [])
+})
+
+test('mapa de sintomas: appendBodyStroke respeita o limite de traços', () => {
+  const um = appendBodyStroke([], 'dor', [{ x: 1, y: 1 }, { x: 9, y: 9 }])
+  deepEqual(um, [{ cor: 'dor', d: 'M1 1 L9 9', espessura: 'media' }])
+  const cheio = Array.from({ length: BODY_DRAWING_MAX_STROKES }, () => ({ cor: 'dor' as const, d: 'M1 1 L2 2' }))
+  equal(appendBodyStroke(cheio, 'rigidez', [{ x: 1, y: 1 }]).length, BODY_DRAWING_MAX_STROKES)
+  equal(appendBodyStroke([], 'dor', []).length, 0)
+})
+
+test('mapa de sintomas: cores usadas seguem a ordem da legenda', () => {
+  const usadas = usedBodyDrawingColors([
+    { cor: 'rigidez', d: 'M1 1 L2 2' },
+    { cor: 'dor', d: 'M1 1 L2 2' },
+    { cor: 'dor', d: 'M1 1 L2 2' },
+  ])
+  deepEqual(
+    usadas.map((item) => item.key),
+    ['dor', 'rigidez'],
+  )
+})
+
+test('mapa de sintomas: figura padrão masculina, feminina só quando pedida', () => {
+  equal(bodyDrawingFigure('feminina'), 'feminina')
+  equal(bodyDrawingFigure('masculina'), 'masculina')
+  equal(bodyDrawingFigure(undefined), 'masculina')
+  equal(bodyDrawingFigure('outra'), 'masculina')
+})
+
+test('mapa de sintomas: espessura do pincel, traço antigo vira médio', () => {
+  equal(bodyDrawingWidth('fina'), 'fina')
+  equal(bodyDrawingWidth('grossa'), 'grossa')
+  equal(bodyDrawingWidth(undefined), 'media')
+  equal(bodyDrawingWidth('enorme'), 'media')
+  deepEqual(
+    appendBodyStroke([], 'dor', [{ x: 1, y: 1 }, { x: 9, y: 9 }], 'grossa'),
+    [{ cor: 'dor', d: 'M1 1 L9 9', espessura: 'grossa' }],
+  )
+  deepEqual(safeBodyStrokes([{ cor: 'dor', d: 'M1 1 L2 2', espessura: 'fina' }]), [
+    { cor: 'dor', d: 'M1 1 L2 2', espessura: 'fina' },
+  ])
+})
+
+test('mapa de sintomas: versão da figura preserva desenhos antigos', () => {
+  const traco = [{ cor: 'dor', d: 'M1 1 L2 2' }]
+  equal(bodyDrawingVersion(undefined, traco), 1)
+  equal(bodyDrawingVersion(undefined, []), 2)
+  equal(bodyDrawingVersion(2, traco), 2)
+  equal(bodyDrawingVersion('2', traco), 1)
+  deepEqual(bodyDrawingViewBox(1), BODY_DRAWING_VIEWBOX)
+  deepEqual(bodyDrawingViewBox(2), BODY_DRAWING_VIEWBOX_V2)
+})
+
+test('mapa de sintomas: coordenadas presas à caixa da versão 2', () => {
+  const rect = { left: 0, top: 0, width: 930, height: 647 }
+  deepEqual(bodyClientToViewBox(930, 647, rect, BODY_DRAWING_VIEWBOX_V2), { x: 1860, y: 1294 })
+  const [ponto] = simplifyBodyStroke([{ x: 1800, y: 1290 }], 3, BODY_DRAWING_VIEWBOX_V2)
+  deepEqual(ponto, { x: 1800, y: 1290 })
+  const [velho] = simplifyBodyStroke([{ x: 1800, y: 1290 }])
+  deepEqual(velho, { x: BODY_DRAWING_VIEWBOX.width, y: BODY_DRAWING_VIEWBOX.height })
+})
+
+test('mapa de sintomas: "Outro" usa a cor e o nome escolhidos e entra na legenda do PDF', () => {
+  const tracos = safeBodyStrokes([
+    { cor: 'dor', d: 'M1 1 L2 2' },
+    { cor: 'outro', d: 'M3 3 L4 4' },
+    { cor: 'inventada', d: 'M5 5 L6 6' },
+  ])
+  deepEqual(tracos.map((t) => t.cor), ['dor', 'outro'])
+  const info = infoDaCor('outro', { cor: '#FF0000', rotulo: ' Cãibra ' })
+  equal(info?.label, 'Cãibra')
+  equal(info?.hex, '#ff0000')
+  deepEqual(info?.rgb, [1, 0, 0])
+  equal(infoDaCor('outro', null)?.label, 'Outro')
+  equal(infoDaCor('outro', { cor: 'azul' })?.hex, BODY_DRAWING_OUTRO_PADRAO)
+  deepEqual(
+    usedBodyDrawingColors(tracos, { cor: '#ff0000', rotulo: 'Cãibra' }).map((c) => c.label),
+    ['Dor', 'Cãibra'],
+  )
+})

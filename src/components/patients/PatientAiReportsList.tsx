@@ -1,0 +1,317 @@
+import { useState } from 'react'
+import { FileText, Mail, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { WhatsAppIcon } from '@/components/ui/WhatsAppIcon'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import {
+  useDeletePatientAiReport,
+  usePatientAiReports,
+} from '@/hooks/usePatientAiReports'
+import { resolvePatientEmail, resolveWhatsAppDigits } from '@/lib/patientContact'
+import { SendEmailDialog } from '@/components/patients/SendEmailDialog'
+import { SendWhatsAppDialog } from '@/components/patients/SendWhatsAppDialog'
+import { PATIENT_AI_COPY } from '@/schemas/patientAi.schema'
+import {
+  openPatientDocumentWhatsApp,
+  sendPatientDocument,
+  signPatientDocumentUrl,
+} from '@/services/patientDocumentSend.service'
+import { toast } from '@/stores/toast.store'
+import type { PatientAiReport } from '@/types/patient'
+
+type PatientAiReportsListProps = {
+  patientId: string
+  /** Fail-closed — hide Excluir and resend when false. */
+  canWrite?: boolean
+  phone?: string | null
+  email?: string | null
+  /** Tipos de PDF que esta lista mostra. */
+  kinds: ReadonlyArray<PatientAiReport['kind']>
+  titulo: string
+}
+
+type SendingChannel = 'whatsapp' | 'email'
+
+function formatReportDate(iso: string) {
+  if (!iso) return '—'
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso))
+}
+
+function openReport(report: PatientAiReport) {
+  if (!report.signedUrl) return
+  window.open(report.signedUrl, '_blank', 'noopener,noreferrer')
+}
+
+function downloadReport(report: PatientAiReport) {
+  if (!report.signedUrl) return
+  const anchor = document.createElement('a')
+  anchor.href = report.signedUrl
+  anchor.download = `avaliacao-${report.kind}-${report.id.slice(0, 8)}.pdf`
+  anchor.rel = 'noopener noreferrer'
+  anchor.target = '_blank'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+function kindBadgeLabel(kind: PatientAiReport['kind']) {
+  switch (kind) {
+    case 'avaliacao':
+      return PATIENT_AI_COPY.kindAvaliacao
+    case 'evolucao':
+      return PATIENT_AI_COPY.kindEvolucao
+    case 'geral':
+      return PATIENT_AI_COPY.kindGeral
+    case 'sessao':
+      return PATIENT_AI_COPY.kindSessao
+  }
+}
+
+function showsSessionLabel(kind: PatientAiReport['kind']) {
+  return kind === 'sessao' || kind === 'evolucao' || kind === 'avaliacao'
+}
+
+/**
+ * Avaliações salvas list (D-05): kind, date, sessionLabel, Abrir/Baixar, Excluir when canWrite.
+ */
+function canResendKind(kind: PatientAiReport['kind']): kind is 'avaliacao' | 'evolucao' {
+  if (kind === 'geral' || kind === 'sessao') return false
+  return kind === 'avaliacao' || kind === 'evolucao'
+}
+
+export function PatientAiReportsList({
+  patientId,
+  canWrite = false,
+  phone,
+  email,
+  kinds,
+  titulo,
+}: PatientAiReportsListProps) {
+  const { data: todos = [], isLoading, isError } = usePatientAiReports(patientId)
+  const reports = todos.filter((report) => kinds.includes(report.kind))
+  const deleteReport = useDeletePatientAiReport(patientId)
+  const [pendingDelete, setPendingDelete] = useState<PatientAiReport | null>(null)
+  const [sending, setSending] = useState<{ id: string; channel: SendingChannel } | null>(null)
+  const [emailReport, setEmailReport] = useState<PatientAiReport | null>(null)
+  const [whatsAppReport, setWhatsAppReport] = useState<PatientAiReport | null>(null)
+  const patientEmailResolved = resolvePatientEmail(email)
+
+  // Abre o popup com o paciente e outros números (cada um abre a sua conversa).
+  function openWhatsAppDialog(report: PatientAiReport) {
+    if (sending || !canResendKind(report.kind)) return
+    setWhatsAppReport(report)
+  }
+
+  /** Abre a conversa do PDF no número informado (ou no do paciente). Devolve se abriu. */
+  async function handleSendWhatsApp(report: PatientAiReport, destino?: string): Promise<boolean> {
+    if (sending || !canResendKind(report.kind)) return false
+    let digits = destino
+    if (!digits) {
+      const resolved = resolveWhatsAppDigits(phone)
+      if (!resolved.ok) {
+        toast(
+          resolved.reason === 'missing'
+            ? PATIENT_AI_COPY.sendNeedPhone
+            : PATIENT_AI_COPY.sendPhoneInvalid,
+          'error',
+        )
+        return false
+      }
+      digits = resolved.digits
+    }
+    setSending({ id: report.id, channel: 'whatsapp' })
+    try {
+      const signed = await signPatientDocumentUrl(report.storagePath, report.kind, patientId)
+      if (!signed.ok || !signed.url.startsWith('https')) {
+        toast(PATIENT_AI_COPY.sendFileUnavailable, 'error')
+        return false
+      }
+      const popup = openPatientDocumentWhatsApp(digits, signed.url)
+      if (popup === null) {
+        toast(PATIENT_AI_COPY.sendWhatsAppBlocked, 'error')
+        return false
+      }
+      toast(PATIENT_AI_COPY.sendWhatsAppSuccess, 'success')
+      return true
+    } finally {
+      setSending(null)
+    }
+  }
+
+  // Abre o popup para escolher os destinatários (paciente e/ou outras pessoas).
+  function handleSendEmail(report: PatientAiReport) {
+    if (sending || !canResendKind(report.kind)) return
+    setEmailReport(report)
+  }
+
+  async function confirmSendEmail(recipients: { sendToPatient: boolean; extraEmails: string[] }) {
+    const report = emailReport
+    if (!report) return
+    setSending({ id: report.id, channel: 'email' })
+    try {
+      await sendPatientDocument({ patientId, reportId: report.id, ...recipients })
+      setEmailReport(null)
+      toast(recipients.extraEmails.length > 0 ? 'E-mail enviado.' : PATIENT_AI_COPY.sendEmailSuccess, 'success')
+    } catch (error) {
+      toast(error instanceof Error ? error.message : PATIENT_AI_COPY.sendEmailError, 'error')
+    } finally {
+      setSending(null)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-sm font-semibold text-ink">{titulo}</p>
+      </div>
+
+      {isLoading ? (
+        <div className="flex min-h-24 items-center justify-center">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-forest border-t-transparent" />
+        </div>
+      ) : null}
+
+      {isError ? (
+        <article className="rounded-2xl border border-error/20 bg-error/5 px-6 py-8 text-sm text-error">
+          Não foi possível carregar os PDFs salvos.
+        </article>
+      ) : null}
+
+      {!isLoading && !isError && reports.length === 0 ? (
+        <article className="rounded-2xl border border-dashed border-line bg-surface px-5 py-10 text-center">
+          <FileText className="mx-auto text-muted" size={22} />
+          <p className="mt-3 text-sm font-medium text-ink">{PATIENT_AI_COPY.listEmptyHeading}</p>
+          {canWrite ? (
+            <p className="mt-1 text-sm text-muted">{PATIENT_AI_COPY.listEmptyBodyCanWrite}</p>
+          ) : (
+            <p className="mt-1 text-sm text-muted">{PATIENT_AI_COPY.listEmptyBodyReadOnly}</p>
+          )}
+        </article>
+      ) : null}
+
+      {!isLoading && !isError && reports.length > 0 ? (
+        <ul className="space-y-2">
+          {reports.map((report) => (
+            <li
+              key={report.id}
+              className="flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-medium text-forest">
+                    {kindBadgeLabel(report.kind)}
+                  </span>
+                  <p className="text-sm font-semibold text-ink">{formatReportDate(report.createdAt)}</p>
+                </div>
+                {showsSessionLabel(report.kind) && report.sessionLabel ? (
+                  <p className="mt-1 truncate text-xs text-muted">{report.sessionLabel}</p>
+                ) : null}
+              </div>
+
+              <div className="flex shrink-0 flex-wrap items-center gap-1">
+                <button
+                  type="button"
+                  aria-label="Abrir"
+                  disabled={!report.signedUrl}
+                  onClick={() => openReport(report)}
+                  className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-forest transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Abrir
+                </button>
+                <button
+                  type="button"
+                  aria-label="Baixar"
+                  disabled={!report.signedUrl}
+                  onClick={() => downloadReport(report)}
+                  className="inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-medium text-forest transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Baixar
+                </button>
+                {canWrite &&
+                report.kind !== 'geral' &&
+                report.kind !== 'sessao' &&
+                (report.kind === 'avaliacao' || report.kind === 'evolucao') ? (
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="min-h-11 w-full sm:w-auto"
+                      isLoading={sending?.id === report.id && sending.channel === 'whatsapp'}
+                      disabled={sending !== null}
+                      onClick={() => openWhatsAppDialog(report)}
+                    >
+                      <WhatsAppIcon />
+                      {PATIENT_AI_COPY.sendWhatsApp}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="min-h-11 w-full sm:w-auto"
+                      isLoading={sending?.id === report.id && sending.channel === 'email'}
+                      disabled={sending !== null}
+                      onClick={() => handleSendEmail(report)}
+                    >
+                      <Mail size={16} aria-hidden />
+                      {PATIENT_AI_COPY.sendEmail}
+                    </Button>
+                  </div>
+                ) : null}
+                {canWrite ? (
+                  <button
+                    type="button"
+                    aria-label="Excluir"
+                    onClick={() => setPendingDelete(report)}
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-muted transition hover:bg-accent-soft hover:text-error"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {canWrite ? (
+        <ConfirmDialog
+          open={Boolean(pendingDelete)}
+          title={PATIENT_AI_COPY.deleteConfirmTitle}
+          description={PATIENT_AI_COPY.deleteConfirmBody}
+          confirmLabel="Excluir"
+          cancelLabel="Voltar"
+          tone="danger"
+          isLoading={deleteReport.isPending}
+          onClose={() => setPendingDelete(null)}
+          onConfirm={() => {
+            if (!pendingDelete) return
+            deleteReport.mutate(
+              { id: pendingDelete.id, storagePath: pendingDelete.storagePath },
+              { onSuccess: () => setPendingDelete(null) },
+            )
+          }}
+        />
+      ) : null}
+
+      <SendWhatsAppDialog
+        open={whatsAppReport !== null}
+        patientPhone={phone}
+        onOpenChat={(digits) => (whatsAppReport ? handleSendWhatsApp(whatsAppReport, digits) : Promise.resolve(false))}
+        onClose={() => setWhatsAppReport(null)}
+      />
+
+      <SendEmailDialog
+        open={emailReport !== null}
+        patientEmail={patientEmailResolved.ok ? patientEmailResolved.email : null}
+        sending={sending?.channel === 'email'}
+        onClose={() => setEmailReport(null)}
+        onSend={(recipients) => void confirmSendEmail(recipients)}
+      />
+    </div>
+  )
+}

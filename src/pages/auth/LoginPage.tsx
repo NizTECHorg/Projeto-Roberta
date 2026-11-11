@@ -1,0 +1,140 @@
+import { useState } from 'react'
+import { MailCheck, X } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { AuthLayout } from '@/components/auth/AuthLayout'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { loginSchema, type LoginFormData } from '@/schemas/auth.schema'
+import { safeRedirectPath } from '@/lib/security'
+import { signInWithEmail } from '@/services/auth.service'
+import { toast } from '@/stores/toast.store'
+
+export function LoginPage() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [showPassword, setShowPassword] = useState(false)
+
+  const state = location.state as
+    | { from?: { pathname: string }; contaCriada?: { email?: string; confirmarEmail?: boolean } }
+    | null
+  const from = safeRedirectPath(state?.from?.pathname)
+  const [contaCriada, setContaCriada] = useState(state?.contaCriada ?? null)
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      email: state?.contaCriada?.email ?? '',
+      password: '',
+    },
+  })
+
+  async function onSubmit(data: LoginFormData) {
+    try {
+      await signInWithEmail(data)
+      navigate(from, { replace: true })
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Erro ao entrar.', 'error')
+    }
+  }
+
+  return (
+    <AuthLayout
+      title="Entrar"
+      subtitle="Acesse sua conta para gerenciar a clínica"
+      footer={
+        <div className="space-y-3">
+          <p>
+            Não tem conta?{' '}
+            <Link to="/cadastro" className="font-medium text-forest hover:text-forest-mid">
+              Criar conta
+            </Link>
+          </p>
+          <Link
+            to="/esqueci-senha"
+            className="inline-flex min-h-11 items-center justify-center text-xs text-muted transition-colors hover:text-forest"
+          >
+            Esqueci minha senha
+          </Link>
+        </div>
+      }
+    >
+      {contaCriada ? (
+        <div
+          role="status"
+          className="relative mb-6 rounded-2xl border border-accent/40 bg-accent-soft p-4 pr-11 shadow-sm sm:p-5 sm:pr-12"
+        >
+          <button
+            type="button"
+            aria-label="Fechar aviso"
+            onClick={() => setContaCriada(null)}
+            className="absolute right-2 top-2 flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:text-ink"
+          >
+            <X size={18} aria-hidden />
+          </button>
+          <div className="flex items-start gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-forest text-white">
+              <MailCheck size={22} aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="text-base font-semibold text-ink sm:text-lg">Conta criada!</p>
+              {contaCriada.confirmarEmail === false ? (
+                <p className="mt-1 text-sm leading-6 text-ink/80">Você já pode entrar com seu e-mail e senha.</p>
+              ) : (
+                <p className="mt-1 text-sm leading-6 text-ink/80">
+                  Enviamos um link de confirmação
+                  {contaCriada.email ? (
+                    <>
+                      {' '}para <span className="break-all font-semibold text-ink">{contaCriada.email}</span>
+                    </>
+                  ) : null}
+                  . Abra o e-mail e confirme a conta antes de entrar. Não achou? Olhe a pasta de spam.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-5" noValidate autoComplete="off">
+        <Input
+          label="E-mail"
+          type="email"
+          autoComplete="off"
+          inputMode="email"
+          spellCheck={false}
+          placeholder="seu@email.com"
+          error={errors.email?.message}
+          {...register('email')}
+        />
+
+        <div className="space-y-2">
+          <Input
+            label="Senha"
+            type={showPassword ? 'text' : 'password'}
+            autoComplete="off"
+            placeholder="••••••••••••"
+            error={errors.password?.message}
+            {...register('password')}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((prev) => !prev)}
+            className="block text-xs text-muted transition-colors hover:text-forest"
+          >
+            {showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+          </button>
+        </div>
+
+        <Button type="submit" fullWidth isLoading={isSubmitting}>
+          Entrar
+        </Button>
+      </form>
+    </AuthLayout>
+  )
+}

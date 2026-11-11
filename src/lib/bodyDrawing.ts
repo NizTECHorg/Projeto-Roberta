@@ -1,0 +1,214 @@
+// Mapa de sintomas desenhado à mão sobre a figura do corpo.
+// Versão 1: frente/costas (src/assets/homi.png e muir.png). Versão 2: quatro vistas, com as laterais
+// (src/assets/corpo-masculino.png e corpo-feminino.png). Sem imports com alias: roda direto em node --test.
+
+export type BodyDrawingBox = { readonly width: number; readonly height: number }
+
+/** Versão 1 — mesmas proporções de src/assets/homi.png e muir.png (1271 × 1238). */
+export const BODY_DRAWING_VIEWBOX = { width: 1271, height: 1238 } as const
+/** Versão 2 — mesmas proporções de src/assets/corpo-masculino.png e corpo-feminino.png (1860 × 1294). */
+export const BODY_DRAWING_VIEWBOX_V2 = { width: 1860, height: 1294 } as const
+
+export type BodyDrawingVersion = 1 | 2
+
+/**
+ * Os traços só valem sobre a figura em que foram feitos. Desenho antigo (sem versão e com traços)
+ * continua na figura de frente/costas; desenho vazio ou marcado como 2 usa as quatro vistas.
+ */
+export function bodyDrawingVersion(versao: unknown, tracos: readonly unknown[]): BodyDrawingVersion {
+  if (versao === 2) return 2
+  return tracos.length > 0 ? 1 : 2
+}
+
+export function bodyDrawingViewBox(versao: BodyDrawingVersion): BodyDrawingBox {
+  return versao === 2 ? BODY_DRAWING_VIEWBOX_V2 : BODY_DRAWING_VIEWBOX
+}
+export const BODY_DRAWING_MAX_STROKES = 200
+export const BODY_DRAWING_MAX_PATH_CHARS = 6000
+export const BODY_DRAWING_MIN_STEP = 3
+
+export const BODY_DRAWING_COLOR_KEYS = [
+  'dor',
+  'queimacao',
+  'formigamento',
+  'dormencia',
+  'irradiacao',
+  'rigidez',
+  // Cor e nome escolhidos pelo profissional (ficha.mapaSintomas.personalizada).
+  'outro',
+] as const
+
+export type BodyDrawingColor = (typeof BODY_DRAWING_COLOR_KEYS)[number]
+
+export type BodyDrawingColorInfo = {
+  key: BodyDrawingColor
+  hex: string
+  /** Mesma cor em 0–1 para o pdf-lib. */
+  rgb: readonly [number, number, number]
+  label: string
+  hint: string
+}
+
+export const BODY_DRAWING_COLORS: readonly BodyDrawingColorInfo[] = [
+  { key: 'dor', hex: '#dc2626', rgb: [0.863, 0.149, 0.149], label: 'Dor', hint: 'Onde dói' },
+  { key: 'queimacao', hex: '#ea580c', rgb: [0.918, 0.345, 0.047], label: 'Queimação', hint: 'Ardência, calor' },
+  { key: 'formigamento', hex: '#ca8a04', rgb: [0.792, 0.541, 0.016], label: 'Formigamento', hint: 'Agulhadas, choque' },
+  { key: 'dormencia', hex: '#2563eb', rgb: [0.145, 0.388, 0.922], label: 'Dormência', hint: 'Pouca sensibilidade' },
+  { key: 'irradiacao', hex: '#7c3aed', rgb: [0.486, 0.227, 0.929], label: 'Irradiação', hint: 'Sintoma que se espalha' },
+  { key: 'rigidez', hex: '#059669', rgb: [0.020, 0.588, 0.412], label: 'Rigidez', hint: 'Travado, limitado' },
+]
+
+export const BODY_DRAWING_OUTRO_PADRAO = '#64748b'
+export const BODY_DRAWING_OUTRO_ROTULO_MAX = 40
+
+/** "Outro" do mapa: cor e o que ela significa, definidos por quem desenha. */
+export type CorPersonalizada = { cor?: string | null; rotulo?: string | null }
+
+function hexValido(valor: string | null | undefined): string | null {
+  const limpo = (valor ?? '').trim().toLowerCase()
+  return /^#[0-9a-f]{6}$/.test(limpo) ? limpo : null
+}
+
+function hexParaRgb(hex: string): readonly [number, number, number] {
+  const n = Number.parseInt(hex.slice(1), 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
+/** Informações de qualquer cor do traço, inclusive o "Outro" com a cor e o nome escolhidos. */
+export function infoDaCor(
+  key: string | null | undefined,
+  personalizada?: CorPersonalizada | null,
+): BodyDrawingColorInfo | undefined {
+  if (key !== 'outro') return BODY_DRAWING_COLORS.find((item) => item.key === key)
+  const hex = hexValido(personalizada?.cor) ?? BODY_DRAWING_OUTRO_PADRAO
+  const rotulo = (personalizada?.rotulo ?? '').trim().slice(0, BODY_DRAWING_OUTRO_ROTULO_MAX)
+  return { key: 'outro', hex, rgb: hexParaRgb(hex), label: rotulo || 'Outro', hint: 'Cor e nome à sua escolha' }
+}
+
+/** Figura de fundo. As duas imagens têm o mesmo tamanho, então os traços valem para ambas. */
+export const BODY_DRAWING_FIGURES = ['masculina', 'feminina'] as const
+export type BodyDrawingFigure = (typeof BODY_DRAWING_FIGURES)[number]
+
+export function bodyDrawingFigure(value: unknown): BodyDrawingFigure {
+  return value === 'feminina' ? 'feminina' : 'masculina'
+}
+
+export type BodyDrawingPoint = { x: number; y: number }
+
+/** Espessura do pincel. Traço sem espessura salva (antigo) vale como média. */
+export const BODY_DRAWING_WIDTH_KEYS = ['fina', 'media', 'grossa'] as const
+export type BodyDrawingWidth = (typeof BODY_DRAWING_WIDTH_KEYS)[number]
+
+export const BODY_DRAWING_WIDTHS: readonly { key: BodyDrawingWidth; label: string; px: number; pdf: number }[] = [
+  { key: 'fina', label: 'Fino', px: 3, pdf: 1.8 },
+  { key: 'media', label: 'Médio', px: 6, pdf: 3.6 },
+  { key: 'grossa', label: 'Grosso', px: 12, pdf: 7.2 },
+]
+
+export function bodyDrawingWidth(value: unknown): BodyDrawingWidth {
+  return value === 'fina' || value === 'grossa' ? value : 'media'
+}
+
+export function bodyDrawingWidthInfo(value: unknown) {
+  const key = bodyDrawingWidth(value)
+  return BODY_DRAWING_WIDTHS.find((item) => item.key === key) ?? BODY_DRAWING_WIDTHS[1]!
+}
+
+export type BodyDrawingStroke = { cor: BodyDrawingColor; d: string; espessura?: BodyDrawingWidth }
+
+/** Só as cores fixas da legenda; para o "Outro" use infoDaCor com a cor personalizada. */
+export function bodyDrawingColor(key: string | null | undefined): BodyDrawingColorInfo | undefined {
+  return BODY_DRAWING_COLORS.find((item) => item.key === key)
+}
+
+function corConhecida(cor: string): boolean {
+  return cor === 'outro' || Boolean(bodyDrawingColor(cor))
+}
+
+function clamp(value: number, max: number): number {
+  return Math.min(max, Math.max(0, Math.round(value)))
+}
+
+/** Converte a posição do ponteiro na caixa renderizada para coordenadas inteiras do viewBox. */
+export function bodyClientToViewBox(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  box: BodyDrawingBox = BODY_DRAWING_VIEWBOX,
+): BodyDrawingPoint {
+  const x = rect.width > 0 ? ((clientX - rect.left) / rect.width) * box.width : 0
+  const y = rect.height > 0 ? ((clientY - rect.top) / rect.height) * box.height : 0
+  return { x: clamp(x, box.width), y: clamp(y, box.height) }
+}
+
+/** Arredonda, prende ao viewBox e descarta pontos a menos de minStep do último mantido. */
+export function simplifyBodyStroke(
+  points: readonly BodyDrawingPoint[],
+  minStep: number = BODY_DRAWING_MIN_STEP,
+  box: BodyDrawingBox = BODY_DRAWING_VIEWBOX,
+): BodyDrawingPoint[] {
+  const out: BodyDrawingPoint[] = []
+  for (const p of points) {
+    const q = { x: clamp(p.x, box.width), y: clamp(p.y, box.height) }
+    const last = out[out.length - 1]
+    if (!last || Math.hypot(q.x - last.x, q.y - last.y) >= minStep) out.push(q)
+  }
+  return out
+}
+
+/** Um ponto só vira um traço mínimo para aparecer como bolinha (linecap round). */
+export function bodyStrokeToPath(points: readonly BodyDrawingPoint[]): string {
+  const [first, ...rest] = points
+  if (!first) return ''
+  const head = `M${first.x} ${first.y}`
+  if (rest.length === 0) return `${head} L${first.x + 0.5} ${first.y}`
+  return [head, ...rest.map((p) => `L${p.x} ${p.y}`)].join(' ')
+}
+
+export function isSafeBodyPath(path: unknown): path is string {
+  return (
+    typeof path === 'string' &&
+    path.length > 0 &&
+    path.length <= BODY_DRAWING_MAX_PATH_CHARS &&
+    path.startsWith('M') &&
+    /^[ML0-9 .-]*$/.test(path)
+  )
+}
+
+/** Só traços com cor conhecida e path seguro; corta no limite de traços. */
+export function safeBodyStrokes(value: unknown): BodyDrawingStroke[] {
+  if (!Array.isArray(value)) return []
+  const out: BodyDrawingStroke[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const { cor, d, espessura } = item as { cor?: unknown; d?: unknown; espessura?: unknown }
+    if (typeof cor !== 'string' || !corConhecida(cor) || !isSafeBodyPath(d)) continue
+    out.push({ cor: cor as BodyDrawingColor, d, espessura: bodyDrawingWidth(espessura) })
+    if (out.length >= BODY_DRAWING_MAX_STROKES) break
+  }
+  return out
+}
+
+/** Acrescenta um traço respeitando os limites; devolve a lista original se não couber. */
+export function appendBodyStroke(
+  strokes: readonly BodyDrawingStroke[],
+  cor: BodyDrawingColor,
+  points: readonly BodyDrawingPoint[],
+  espessura: BodyDrawingWidth = 'media',
+  box: BodyDrawingBox = BODY_DRAWING_VIEWBOX,
+): BodyDrawingStroke[] {
+  const d = bodyStrokeToPath(simplifyBodyStroke(points, BODY_DRAWING_MIN_STEP, box))
+  if (!isSafeBodyPath(d) || strokes.length >= BODY_DRAWING_MAX_STROKES) return [...strokes]
+  return [...strokes, { cor, d, espessura }]
+}
+
+/** Cores usadas no desenho, na ordem da legenda, com o "Outro" no fim (o PDF mostra só o que importa). */
+export function usedBodyDrawingColors(
+  strokes: readonly BodyDrawingStroke[],
+  personalizada?: CorPersonalizada | null,
+): BodyDrawingColorInfo[] {
+  const used = new Set<string>(strokes.map((item) => item.cor))
+  const fixas = BODY_DRAWING_COLORS.filter((item) => used.has(item.key))
+  const outro = used.has('outro') ? infoDaCor('outro', personalizada) : undefined
+  return outro ? [...fixas, outro] : fixas
+}

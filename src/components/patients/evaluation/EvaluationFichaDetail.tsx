@@ -1,0 +1,247 @@
+import type { EvaluationFicha } from '@/schemas/evaluationFicha.schema'
+import { formatTesteFuncional } from '@/lib/testesFuncionais'
+import { BodyDrawingPad } from '@/components/patients/evaluation/BodyDrawingPad'
+import { safeBodyStrokes } from '@/lib/bodyDrawing'
+import { DetailLeaf } from '@/components/patients/evaluation/fichaFormPrimitives'
+import { ATIVIDADES, formatAtividadeFisica, formatMiolo } from '@/lib/atividadeCapacidade'
+import { resumoEsportes } from '@/lib/esportesAvaliacao'
+import { FOCUS_REGIONS } from '@/lib/focusRegions'
+import {
+  formatAchado,
+  formatCabecalhoRegiao,
+  formatLinhaMovimento,
+  formatTeste,
+} from '@/lib/mobilidadePalpacao'
+
+const SYMBOL_GLYPH: Record<string, string> = {
+  X: 'X',
+  hatch: '////',
+  O: 'O',
+  arrow: '↑',
+  star: '★',
+}
+
+function checkedLabels(
+  flags: Record<string, unknown> | undefined,
+  labels: Record<string, string>,
+): string | null {
+  if (!flags) return null
+  const parts = Object.entries(labels)
+    .filter(([key]) => flags[key] === true)
+    .map(([, label]) => label)
+  if (flags.outroDetalhe && typeof flags.outroDetalhe === 'string' && flags.outroDetalhe.trim()) {
+    parts.push(flags.outroDetalhe.trim())
+  }
+  if (flags.outraDetalhe && typeof flags.outraDetalhe === 'string' && flags.outraDetalhe.trim()) {
+    parts.push(flags.outraDetalhe.trim())
+  }
+  if (flags.outrosDetalhe && typeof flags.outrosDetalhe === 'string' && flags.outrosDetalhe.trim()) {
+    parts.push(flags.outrosDetalhe.trim())
+  }
+  if (flags.outroAchadoDetalhe && typeof flags.outroAchadoDetalhe === 'string' && flags.outroAchadoDetalhe.trim()) {
+    parts.push(flags.outroAchadoDetalhe.trim())
+  }
+  return parts.length > 0 ? parts.join(', ') : null
+}
+
+type EvaluationFichaDetailProps = {
+  ficha: EvaluationFicha
+}
+
+export function EvaluationFichaDetail({ ficha }: EvaluationFichaDetailProps) {
+  const id = ficha.anamnese?.identificacao
+  const queixa = ficha.anamnese?.queixa
+  const historia = ficha.anamnese?.historiaAtual
+  const tratamentos = ficha.anamnese?.tratamentos
+  const pregresso = ficha.anamnese?.historicoPregresso
+  const sintomas = ficha.sintomas
+  const funcao = ficha.funcao
+  const esportesResumo = resumoEsportes(funcao)
+  const atividades = funcao?.atividadesAfetadas
+  const plano = ficha.avaliacaoPlano
+  const tracosMapa = safeBodyStrokes(ficha.mapaSintomas?.tracos)
+
+  const marks = sintomas?.mapa?.marks ?? []
+  const markLabels = marks
+    .map((mark) => {
+      const region = FOCUS_REGIONS.find((r) => r.key === mark.regionKey)
+      if (!region) return null
+      const glyph = mark.symbol ? SYMBOL_GLYPH[mark.symbol] ?? mark.symbol : ''
+      return glyph ? `${region.label} (${glyph})` : region.label
+    })
+    .filter(Boolean)
+    .join(', ')
+
+  return (
+    <div className="space-y-5">
+      {/* Seção só com o título (nenhum campo preenchido) some. */}
+      <section className="space-y-3 [&:not(:has(>:nth-child(2)))]:hidden">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">01 · Anamnese</p>
+        <DetailLeaf label="Nome" value={id?.nomeCompleto} />
+        <DetailLeaf label="Nascimento" value={id?.dataNascimento} />
+        <DetailLeaf label="Profissão" value={id?.profissao} />
+        <DetailLeaf label="Peso" value={id?.peso} />
+        <DetailLeaf label="Altura" value={id?.altura} />
+        <DetailLeaf label="Contato" value={id?.contato} />
+        <DetailLeaf label="Queixa" value={queixa?.oQueTrouxe} />
+        <DetailLeaf label="Região" value={queixa?.regiao} />
+        <DetailLeaf
+          label="Lado"
+          value={checkedLabels(queixa?.lado, {
+            direito: 'Direito',
+            esquerdo: 'Esquerdo',
+            bilateral: 'Bilateral',
+            central: 'Central',
+            naoSeAplica: 'Não se aplica',
+          })}
+        />
+        <DetailLeaf label="Há quanto tempo" value={queixa?.haQuantoTempo} />
+        <DetailLeaf label="Como começou" value={historia?.comoComecou} />
+        <DetailLeaf label="Achados de exames" value={tratamentos?.achados} />
+        <DetailLeaf label="Histórico — observações" value={pregresso?.observacoes} />
+        <DetailLeaf
+          label="Pratica atividade física"
+          value={
+            funcao?.rotina?.praticaAtividadeFisica === 'sim'
+              ? 'Sim'
+              : funcao?.rotina?.praticaAtividadeFisica === 'nao'
+                ? 'Não'
+                : undefined
+          }
+        />
+        <DetailLeaf label="Atividade física" value={formatAtividadeFisica(funcao?.rotina)} />
+        {esportesResumo.map((esporte) => (
+          <DetailLeaf
+            key={esporte.label}
+            label={`Esporte · ${esporte.label}`}
+            value={
+              [
+                ...esporte.linhas,
+                ...esporte.problemas.map((p) => `Problema: ${p.nome} · ${p.regiao}`),
+              ].join('\n') || 'Sem dados da prática'
+            }
+          />
+        ))}
+      </section>
+
+      {/* Seção só com o título (nenhum campo preenchido) some. */}
+      <section className="space-y-3 [&:not(:has(>:nth-child(2)))]:hidden">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">02 · Sintomas</p>
+        {tracosMapa.length > 0 ? (
+          <BodyDrawingPad value={tracosMapa} figura={ficha.mapaSintomas?.figura} versao={ficha.mapaSintomas?.versao} personalizada={ficha.mapaSintomas?.personalizada} disabled showLegend={false} onChange={() => {}} />
+        ) : null}
+        <DetailLeaf label="Observações do desenho" value={ficha.mapaSintomas?.observacao} />
+        <DetailLeaf label="Regiões marcadas" value={markLabels || null} />
+        <DetailLeaf
+          label="Característica"
+          value={checkedLabels(sintomas?.caracteristica, {
+            dor: 'Dor',
+            rigidez: 'Rigidez',
+            fraqueza: 'Fraqueza',
+            parestesia: 'Parestesia',
+            dormencia: 'Dormência',
+            instabilidade: 'Instabilidade',
+            travamento: 'Travamento',
+            estalo: 'Estalo',
+            edema: 'Edema',
+            outro: 'Outro',
+          })}
+        />
+        <DetailLeaf label="EVA agora" value={sintomas?.intensidade?.agora} />
+        <DetailLeaf label="EVA melhor" value={sintomas?.intensidade?.melhor} />
+        <DetailLeaf label="EVA pior" value={sintomas?.intensidade?.pior} />
+        <DetailLeaf label="O que piora — detalhe" value={sintomas?.piora?.detalhe} />
+        <DetailLeaf label="O que melhora — detalhe" value={sintomas?.melhora?.detalhe} />
+      </section>
+
+      {/* Seção só com o título (nenhum campo preenchido) some. */}
+      <section className="space-y-3 [&:not(:has(>:nth-child(2)))]:hidden">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">03 · Função</p>
+        <DetailLeaf label="Limitação 1" value={funcao?.limitacaoFuncional?.item1} />
+        <DetailLeaf label="Limitação 2" value={funcao?.limitacaoFuncional?.item2} />
+        <DetailLeaf label="Limitação 3" value={funcao?.limitacaoFuncional?.item3} />
+        {ATIVIDADES.map((item) => {
+          const marcada = atividades?.[item.key] === true
+          const capacidade = atividades?.capacidades?.[item.key]
+          const miolo = formatMiolo(capacidade?.atual, capacidade?.antes)
+          if (!marcada && !miolo) return null
+          return <DetailLeaf key={item.key} label={item.label} value={miolo || true} />
+        })}
+        <DetailLeaf
+          label="Registro anterior"
+          value={atividades?.textoLegado?.trim() ? atividades.textoLegado : undefined}
+        />
+        <DetailLeaf label="Boa melhora" value={funcao?.expectativas?.boaMelhora} />
+        <DetailLeaf label="Triagem — observações" value={funcao?.triagemSeguranca?.observacoes} />
+        <DetailLeaf label="Medicamentos" value={funcao?.medicacoes?.medicamentos} />
+        <DetailLeaf label="Alergias" value={funcao?.medicacoes?.alergias} />
+      </section>
+
+      {/* Seção só com o título (nenhum campo preenchido) some. */}
+      <section className="space-y-3 [&:not(:has(>:nth-child(2)))]:hidden">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">04 · Avaliação e plano</p>
+        <DetailLeaf label="Inspeção — achados" value={plano?.inspecao?.achados} />
+        <DetailLeaf label="Neurológico — achados" value={plano?.neurologico?.achados} />
+        {(plano?.mobilidade?.regioes ?? []).map((regiao, index) => {
+          const nome = formatCabecalhoRegiao({ regiao: regiao.regiao }, { incluirNome: true })
+          const linhas = [
+            formatCabecalhoRegiao(regiao, { incluirNome: false }),
+            ...(regiao.movimentos ?? []).map((movimento) =>
+              formatLinhaMovimento(movimento, regiao.regiao),
+            ),
+          ].filter((linha) => linha.trim().length > 0)
+          const value = linhas.join('\n')
+          if (!nome.trim() || !value) return null
+          return <DetailLeaf key={`${regiao.regiao}-${index}`} label={nome} value={value} />
+        })}
+        <DetailLeaf
+          label="Registro anterior"
+          value={plano?.mobilidade?.registroAnterior?.trim() ? plano.mobilidade.registroAnterior : undefined}
+        />
+        {(plano?.palpacaoTestes?.achados ?? []).map((achado, index) => {
+          const frase = formatAchado(achado)
+          if (!frase.trim()) return null
+          return <DetailLeaf key={`achado-${achado.regiao}-${index}`} label="Achado" value={frase} />
+        })}
+        <DetailLeaf
+          label="Registro anterior"
+          value={
+            plano?.palpacaoTestes?.palpacaoRegistroAnterior?.trim()
+              ? plano.palpacaoTestes.palpacaoRegistroAnterior
+              : undefined
+          }
+        />
+        <DetailLeaf
+          label="Testes clínicos"
+          value={
+            (plano?.palpacaoTestes?.testes ?? [])
+              .map((teste) => formatTeste(teste))
+              .filter((linha) => linha.trim().length > 0)
+              .join('\n') || undefined
+          }
+        />
+        <DetailLeaf
+          label="Registro anterior"
+          value={
+            plano?.palpacaoTestes?.testesRegistroAnterior?.trim()
+              ? plano.palpacaoTestes.testesRegistroAnterior
+              : undefined
+          }
+        />
+        <DetailLeaf
+          label="Testes funcionais"
+          value={(plano?.palpacaoTestes?.funcionais ?? []).map((item) => formatTesteFuncional(item)).join('\n') || undefined}
+        />
+        <DetailLeaf label="Teste funcional (registro anterior)" value={plano?.palpacaoTestes?.testeFuncional} />
+        <DetailLeaf label="Resultado inicial" value={plano?.palpacaoTestes?.resultadoInicial} />
+        <DetailLeaf label="Diagnóstico fisioterapêutico" value={plano?.sintese?.diagnosticoFisio} />
+        <DetailLeaf label="Prognóstico" value={plano?.sintese?.prognostico} />
+        <DetailLeaf label="Objetivo curto 1" value={plano?.objetivos?.curto1} />
+        <DetailLeaf label="Frequência" value={plano?.planejamento?.frequencia} />
+        <DetailLeaf label="Progressão" value={plano?.planejamento?.criteriosProgressao} />
+        <DetailLeaf label="Fisioterapeuta" value={plano?.profissional?.fisioterapeuta} />
+      </section>
+
+    </div>
+  )
+}

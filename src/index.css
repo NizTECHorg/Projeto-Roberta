@@ -1,0 +1,975 @@
+@import "tailwindcss";
+
+@theme {
+  --color-forest: #0b1d36;
+  --color-forest-mid: #163056;
+  --color-accent: #2f7dff;
+  --color-accent-soft: #e7f0fb;
+  --color-canvas: #f3f5f8;
+  --color-surface: #ffffff;
+  --color-ink: #102038;
+  --color-muted: #5a6b80;
+  --color-line: #e1e8f0;
+  --color-error: #dc4a4a;
+  --color-success: #2f7dff;
+  --color-sage: #24b296;
+  --color-sage-soft: #e6f5f0;
+  --color-sky-soft: #eaf2fd;
+  --font-lp-display: "Fraunces", "Cormorant Garamond", Georgia, serif;
+
+  /* aliases — páginas antigas passam a herdar o tema claro */
+  --color-chocolate: #0b1d36;
+  --color-caramel: #2f7dff;
+  --color-cream: #102038;
+  --color-dark: #f3f5f8;
+  --color-dark-surface: #ffffff;
+  --color-dark-border: #e1e8f0;
+
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+
+  --radius-sm: 0.625rem;
+  --radius-md: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.5rem;
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans min-h-screen antialiased;
+  }
+
+  @media (min-width: 1024px) {
+    html,
+    body {
+      overflow: hidden;
+      height: 100%;
+    }
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #c5d0dc transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #c5d0dc;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #7a8ba3;
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+.nav-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.nav-scroll:hover,
+.nav-scroll:focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.nav-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.nav-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 12px;
+}
+
+.nav-scroll::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border: 0;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.nav-scroll:hover::-webkit-scrollbar-thumb,
+.nav-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.nav-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(47, 125, 255, 0.55);
+}
+
+.panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #d5dde8 transparent;
+}
+
+.panel-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel-scroll::-webkit-scrollbar-thumb {
+  background-color: #d5dde8;
+  border-radius: 999px;
+}
+
+.case-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 32, 56, 0.28) transparent;
+}
+
+.case-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.case-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.case-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(16, 32, 56, 0.28);
+  border-radius: 999px;
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .auth-shell {
+    background-color: #060f1f;
+    background-image:
+      radial-gradient(ellipse 55% 80% at 8% 35%, rgba(32, 92, 210, 0.52), transparent 62%),
+      radial-gradient(ellipse 50% 70% at 92% 18%, rgba(36, 178, 150, 0.28), transparent 58%),
+      radial-gradient(ellipse 70% 55% at 78% 88%, rgba(24, 80, 190, 0.38), transparent 60%),
+      radial-gradient(ellipse 45% 45% at 48% 58%, rgba(40, 150, 140, 0.14), transparent 70%),
+      linear-gradient(105deg, #050d1a 0%, #0a1836 36%, #0c2460 62%, #102a68 100%);
+  }
+
+  .auth-shell::before {
+    content: '';
+    position: absolute;
+    inset: -28%;
+    background:
+      radial-gradient(ellipse 42% 36% at 78% 42%, rgba(48, 190, 168, 0.26), transparent 72%),
+      radial-gradient(ellipse 38% 42% at 18% 72%, rgba(36, 96, 220, 0.28), transparent 68%),
+      radial-gradient(ellipse 30% 30% at 58% 12%, rgba(47, 125, 255, 0.16), transparent 70%);
+    filter: blur(92px);
+    pointer-events: none;
+  }
+
+  .auth-form-card {
+    background: #ffffff;
+  }
+
+  @media (min-width: 1024px) {
+    .auth-form-card {
+      border: 1.5px solid transparent;
+      background:
+        linear-gradient(#ffffff, #ffffff) padding-box,
+        linear-gradient(
+          145deg,
+          rgba(47, 125, 255, 0.88) 0%,
+          rgba(36, 168, 150, 0.55) 42%,
+          rgba(18, 64, 160, 0.65) 72%,
+          rgba(16, 48, 120, 0.72) 100%
+        )
+        border-box;
+    }
+  }
+}
+
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.landing-fade {
+  opacity: 0;
+  animation: landing-fade-up 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.landing-delay-1 {
+  animation-delay: 0.12s;
+}
+.landing-delay-2 {
+  animation-delay: 0.24s;
+}
+.landing-delay-3 {
+  animation-delay: 0.36s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-fade {
+    animation: none;
+    opacity: 1;
+  }
+
+  .dash-in,
+  .dash-line,
+  .dash-ring {
+    animation: none !important;
+  }
+}
+
+/* Landing page (Phase 36) — prefixo lp- */
+.lp-section {
+  scroll-margin-top: 80px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lp-scroll {
+    scroll-behavior: smooth;
+  }
+}
+
+.lp-reveal {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0);
+  transition:
+    opacity 800ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 800ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 800ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lp-reveal[data-reveal='left'] {
+  transform: translate3d(-40px, 0, 0);
+}
+
+.lp-reveal[data-reveal='right'] {
+  transform: translate3d(40px, 0, 0);
+}
+
+.lp-reveal[data-reveal='scale'] {
+  transform: scale(0.94);
+}
+
+.lp-reveal[data-reveal='blur'] {
+  filter: blur(10px);
+  transform: translate3d(0, 12px, 0);
+}
+
+.lp-reveal.lp-in {
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+
+/* Fonte de destaque da landing (Fraunces carregada só na LP) */
+.lp-display {
+  font-family: var(--font-lp-display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+
+.lp-gradient-text {
+  background-image: linear-gradient(100deg, #2f7dff 0%, #24b296 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Sublinhado desenhado no hero */
+.lp-swoosh path {
+  stroke-dasharray: 320;
+  stroke-dashoffset: 320;
+  animation: lp-draw 1.4s 400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes lp-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Barra de progresso da rolagem */
+.lp-progress {
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+}
+
+/* Faixa com rolagem infinita */
+.lp-marquee {
+  display: flex;
+  width: max-content;
+  animation: lp-marquee 38s linear infinite;
+}
+
+@keyframes lp-marquee {
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+/* Parallax: o JS escreve --lp-py (px) em cada elemento */
+.lp-parallax {
+  transform: translate3d(0, var(--lp-py, 0px), 0);
+  will-change: transform;
+}
+
+/* Entrada do hero ao carregar */
+.lp-hero-in {
+  animation: lp-hero-in 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lp-hero-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+}
+
+@keyframes lp-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.lp-float {
+  animation: lp-float 6s ease-in-out infinite;
+}
+
+/* Jornada do paciente (Sobre o Fluxo): texto entra suave a cada etapa; o ponto da curva pulsa. */
+@keyframes lp-journey-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+}
+
+.lp-journey-in {
+  animation: lp-journey-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes lp-journey-ping {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.05;
+    transform: scale(1.6);
+  }
+}
+
+.lp-journey-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lp-journey-ping 2s ease-in-out infinite;
+}
+
+.lp-float-delay {
+  animation-delay: -3s;
+}
+
+.lp-card {
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.lp-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(11, 29, 54, 0.08);
+}
+
+.lp-faq-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms ease;
+}
+
+.lp-faq-panel[data-open='true'] {
+  grid-template-rows: 1fr;
+}
+
+.lp-faq-panel > div {
+  overflow: hidden;
+}
+
+.lp-chevron {
+  transition: transform 200ms ease;
+}
+
+.lp-blob-shape {
+  border-radius: 42% 58% 55% 45% / 50% 45% 55% 50%;
+}
+
+/*
+  Cartões vivos (6 pequenos): a animação já está aplicada, mas pausada no primeiro quadro.
+  O quadro 0% é o estado completo (o "estático"); no hover ela continua dali, sem corte.
+*/
+.lp-live-row,
+.lp-live-slot,
+.lp-live-now,
+.lp-live-bar,
+.lp-live-pop,
+.lp-live-line,
+.lp-live-progress,
+.lp-live-check,
+.lp-live-ring {
+  animation-fill-mode: both;
+  animation-iteration-count: infinite;
+  animation-play-state: paused;
+}
+
+.lp-live-row {
+  animation-name: lp-live-row;
+  animation-duration: 4.8s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-row {
+  0%,
+  70% {
+    opacity: 1;
+    transform: none;
+  }
+  80%,
+  88% {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lp-live-slot {
+  animation-name: lp-live-slot;
+  animation-duration: 3.6s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-slot {
+  0%,
+  100% {
+    border-color: #e1e8f0;
+    box-shadow: none;
+  }
+  15%,
+  30% {
+    border-color: #2f7dff;
+    box-shadow: 0 0 0 3px rgba(47, 125, 255, 0.15);
+  }
+}
+
+.lp-live-now {
+  animation-name: lp-live-now;
+  animation-duration: 3.6s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-now {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(84px);
+  }
+}
+
+.lp-live-bar {
+  animation-name: lp-live-bar;
+  animation-duration: 2.8s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-bar {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.45);
+  }
+}
+
+.lp-live-pop {
+  animation-name: lp-live-pop;
+  animation-duration: 3s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-pop {
+  0%,
+  40%,
+  100% {
+    transform: translateY(0);
+  }
+  20% {
+    transform: translateY(-4px);
+  }
+}
+
+.lp-live-line {
+  animation-name: lp-live-line;
+  animation-duration: 3.2s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-line {
+  0%,
+  100% {
+    transform: scaleX(1);
+  }
+  15% {
+    transform: scaleX(0);
+  }
+  55% {
+    transform: scaleX(1);
+  }
+}
+
+.lp-live-progress {
+  animation-name: lp-live-progress;
+  animation-duration: 3.2s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-progress {
+  0%,
+  100% {
+    transform: scaleX(1);
+  }
+  15% {
+    transform: scaleX(0);
+  }
+  70% {
+    transform: scaleX(1);
+  }
+}
+
+.lp-live-check {
+  animation-name: lp-live-check;
+  animation-duration: 3.2s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-check {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  10%,
+  70% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  80% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.lp-live-ring {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 33;
+  animation-name: lp-live-ring;
+  animation-duration: 4s;
+  animation-timing-function: ease-in-out;
+}
+@keyframes lp-live-ring {
+  0%,
+  100% {
+    stroke-dashoffset: 33;
+  }
+  15% {
+    stroke-dashoffset: 100;
+  }
+  65% {
+    stroke-dashoffset: 33;
+  }
+}
+
+/*
+  Mockups grandes do Produto: animação contínua, ciclo de 6s.
+  Loop sem emenda: o quadro 100% é igual ao 0% e o "reinício" acontece invisível.
+*/
+.lp-m-draw {
+  stroke-dasharray: 1;
+  animation: lp-m-draw 6s ease-in-out infinite both;
+}
+@keyframes lp-m-draw {
+  /* Some com fade e só "rebobina" quando já está invisível (0% ↔ 100% sem salto). */
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 0;
+  }
+  1% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  35%,
+  82% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  92%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+.lp-m-pop {
+  animation: lp-m-pop 6s cubic-bezier(0.34, 1.3, 0.64, 1) infinite both;
+}
+@keyframes lp-m-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  8%,
+  80% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  92%,
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.lp-m-type {
+  animation: 6s linear infinite both;
+}
+
+.lp-m-type-0 {
+  animation-name: lp-m-type-0;
+}
+@keyframes lp-m-type-0 {
+  0%,
+  2% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 1;
+  }
+  14%,
+  74% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  80%,
+  99% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0;
+  }
+  100% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+}
+
+.lp-m-type-1 {
+  animation-name: lp-m-type-1;
+}
+@keyframes lp-m-type-1 {
+  0%,
+  16% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 1;
+  }
+  28%,
+  79% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  85%,
+  99% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0;
+  }
+  100% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+}
+
+.lp-m-type-2 {
+  animation-name: lp-m-type-2;
+}
+@keyframes lp-m-type-2 {
+  0%,
+  30% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 1;
+  }
+  42%,
+  84% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  90%,
+  99% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0;
+  }
+  100% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+  }
+}
+
+.lp-m-fill {
+  animation: lp-m-fill 6s ease-in-out infinite both;
+}
+@keyframes lp-m-fill {
+  0% {
+    transform: scaleX(0);
+    opacity: 0;
+  }
+  1% {
+    transform: scaleX(0);
+    opacity: 1;
+  }
+  25%,
+  82% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  92%,
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+.lp-m-ping {
+  animation: lp-m-ping 2s ease-out infinite both;
+}
+@keyframes lp-m-ping {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  15% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+.lp-m-wobble {
+  animation: lp-m-wobble 3s ease-in-out infinite;
+}
+@keyframes lp-m-wobble {
+  0%,
+  100% {
+    transform: rotate(0) scale(1);
+  }
+  50% {
+    transform: rotate(18deg) scale(1.12);
+  }
+}
+
+.lp-m-glow {
+  animation: lp-m-glow 3s ease-in-out infinite;
+}
+@keyframes lp-m-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 125, 255, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(47, 125, 255, 0.2);
+  }
+}
+
+/* Página 404: o anel do "0" enche e esvazia; o ponto dá a volta */
+.nf-anel {
+  stroke-dasharray: 100;
+  animation: nf-anel 4s ease-in-out infinite;
+}
+@keyframes nf-anel {
+  0%,
+  100% {
+    stroke-dashoffset: 70;
+  }
+  50% {
+    stroke-dashoffset: 10;
+  }
+}
+.nf-orbita {
+  transform-origin: 60px 60px;
+  animation: nf-orbita 6s linear infinite;
+}
+@keyframes nf-orbita {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .lp-float {
+    animation: none;
+  }
+
+  .lp-journey-in,
+  .lp-journey-ping {
+    animation: none;
+  }
+
+  .lp-card,
+  .lp-card:hover {
+    transition: none;
+    transform: none;
+  }
+
+  .lp-faq-panel,
+  .lp-chevron {
+    transition: none;
+  }
+
+  .lp-swoosh path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .lp-marquee,
+  .nf-anel,
+  .nf-orbita,
+  .lp-hero-in,
+  .lp-live-row,
+  .lp-live-slot,
+  .lp-live-now,
+  .lp-live-bar,
+  .lp-live-pop,
+  .lp-live-line,
+  .lp-live-progress,
+  .lp-live-check,
+  .lp-live-ring,
+  .lp-m-draw,
+  .lp-m-pop,
+  .lp-m-type,
+  .lp-m-fill,
+  .lp-m-wobble,
+  .lp-m-glow {
+    animation: none !important;
+  }
+
+  .lp-m-ping {
+    animation: none !important;
+    opacity: 0;
+  }
+
+  .lp-parallax {
+    transform: none;
+  }
+}
+
+
+.ai-generating {
+  background-color: #2f7dff;
+  color: #fff;
+  animation: ai-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes ai-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(47, 125, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 16px 4px rgba(47, 125, 255, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-generating {
+    animation: none;
+    box-shadow: 0 0 16px 4px rgba(47, 125, 255, 0.45);
+  }
+}
+
+.dash-card {
+  transition:
+    transform 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.25s ease;
+}
+
+.dash-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 2px 6px rgba(11, 29, 54, 0.06);
+}
+
+.dash-in {
+  animation: landing-fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dash-line {
+  stroke-dasharray: 720;
+  stroke-dashoffset: 720;
+  animation: dash-draw 1.2s 0.4s ease forwards;
+}
+
+@keyframes dash-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.dash-ring {
+  transform-origin: 50% 50%;
+  animation: dash-spin 18s linear infinite;
+}
+
+@keyframes dash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

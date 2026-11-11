@@ -1,0 +1,836 @@
+import { supabase } from '@/lib/supabase/client'
+import { normalizeCpf } from '@/lib/cpf'
+import { mapDbError, sanitizeText } from '@/lib/security'
+import { narrowAiSummaryFields, narrowSummaryEdits } from '@/lib/patientSummary'
+import { narrowGender } from '@/lib/patientGender'
+import { getFocusRegion } from '@/lib/focusRegions'
+import { PATIENT_AI_COPY } from '@/schemas/patientAi.schema'
+import { focusRegionKeySchema } from '@/schemas/patient.schema'
+import type { SummaryTexts } from '@/lib/patientSummary'
+import { signPatientPhotoUrls } from '@/services/patientPhoto.service'
+import type {
+  AlertTone,
+  CreatePatientAlertInput,
+  CreatePatientInput,
+  GoalStatus,
+  Patient,
+  PatientAlert,
+  PatientDashboard,
+  PatientGoal,
+  PatientListItem,
+  PatientStatus,
+  SessionStatus,
+  UpdatePatientAlertInput,
+  UpdatePatientInput,
+  UpsertPatientGoalInput,
+} from '@/types/patient'
+interface PatientRow {
+  id: string
+  full_name: string
+  code: string
+  birth_date: string | null
+  phone: string | null
+  email: string | null
+  status: PatientStatus
+  profession: string | null
+  cpf?: string | null
+  gender: string | null
+  naturalidade?: string | null
+  estado_civil?: string | null
+  peso?: string | null
+  altura?: string | null
+  endereco_residencial?: string | null
+  endereco_profissional?: string | null
+  emergency_name: string | null
+  emergency_phone: string | null
+  emergency_relation: string | null
+  admin_notes: string | null
+  referral_source: string | null
+  treatment_started_on: string | null
+  sessions_done: number
+  sessions_planned: number
+  frequency: string | null
+  therapist_name: string | null
+  program_name: string | null
+  program_progress: number
+  complaint: string | null
+  diagnosis: string | null
+  current_eva: number
+  last_visit_on: string | null
+  ai_summary: string | null
+  ai_summary_fields: Record<string, unknown> | null
+  summary_edits: Record<string, unknown> | null
+  evolution_summary: string | null
+  last_conducts: string | null
+  next_session_plan: string | null
+  photo_tone: string
+  photo_path: string | null
+  created_by: string | null
+}
+
+interface ListPatientRow {
+  id: string
+  full_name: string
+  code: string
+  phone: string | null
+  status: PatientStatus
+  photo_tone: string
+  photo_path: string | null
+  program_name: string | null
+  sessions_done: number
+  sessions_planned: number
+  created_at: string
+  created_by: string | null
+  birth_date: string | null
+}
+
+const GOAL_COLUMNS = 'id, title, status, is_done, created_on, achieved_on, sort_order'
+
+interface GoalRow {
+  id: string
+  title: string
+  status: string | null
+  is_done: boolean
+  created_on: string | null
+  achieved_on: string | null
+  sort_order: number
+}
+
+const FOCUS_COLUMNS = 'id, region_key, label, is_active, sort_order'
+
+interface FocusRow {
+  id: string
+  region_key: string | null
+  label: string
+  is_active: boolean
+  sort_order: number
+}
+
+interface PainRow {
+  recorded_on: string
+  eva: number
+}
+
+interface SessionRow {
+  id: string
+  scheduled_at: string | null
+  session_type: string | null
+  place: string | null
+  status: SessionStatus
+  notes: string | null
+}
+
+interface AlertRow {
+  id: string
+  message: string
+  tone: AlertTone
+  created_at: string
+  created_by: string | null
+  created_by_name: string | null
+}
+
+const ALERT_COLUMNS = 'id, message, tone, created_at, created_by, created_by_name'
+
+const DETAIL_COLUMNS =
+  'id, full_name, code, birth_date, phone, email, status, profession, gender, naturalidade, estado_civil, peso, altura, endereco_residencial, endereco_profissional, emergency_name, emergency_phone, emergency_relation, admin_notes, referral_source, treatment_started_on, sessions_done, sessions_planned, frequency, therapist_name, program_name, program_progress, complaint, diagnosis, current_eva, last_visit_on, ai_summary, ai_summary_fields, summary_edits, evolution_summary, last_conducts, next_session_plan, photo_tone, photo_path, created_by, cpf'
+
+const LIST_COLUMNS =
+  'id, full_name, code, phone, status, photo_tone, photo_path, program_name, sessions_done, sessions_planned, created_at, created_by, birth_date'
+
+const DASHBOARD_COLUMNS =
+  'id, full_name, code, phone, status, photo_tone, photo_path, complaint, diagnosis, treatment_started_on, sessions_done, sessions_planned, last_visit_on, created_by'
+
+function throwIfError(error: { message: string } | null) {
+  if (error) throw new Error(error.message)
+}
+
+function throwIfFocusError(error: { message?: string; code?: string } | null) {
+  if (error) throw new Error(mapDbError(error))
+}
+
+function ageFrom(isoDate: string | null) {
+  if (!isoDate) return null
+  const birth = new Date(`${isoDate}T00:00:00`)
+  const today = new Date()
+  let age = today.getFullYear() - birth.getFullYear()
+  const month = today.getMonth() - birth.getMonth()
+  if (month < 0 || (month === 0 && today.getDate() < birth.getDate())) age -= 1
+  return age
+}
+
+function initialsFrom(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+}
+
+function formatDate(isoDate: string | null) {
+  if (!isoDate) return '—'
+  return new Intl.DateTimeFormat('pt-BR').format(new Date(`${isoDate}T00:00:00`))
+}
+
+function formatDateTime(iso: string | null) {
+  if (!iso) return { dateLabel: '—', timeLabel: '—' }
+  const date = new Date(iso)
+  return {
+    dateLabel: new Intl.DateTimeFormat('pt-BR').format(date),
+    timeLabel: new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(date),
+  }
+}
+
+function emptyToNull(value?: string) {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function generatePatientCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const randomBytes = new Uint8Array(6)
+  crypto.getRandomValues(randomBytes)
+  let suffix = ''
+  for (let i = 0; i < 6; i += 1) {
+    const byte = randomBytes[i] ?? 0
+    suffix += alphabet[byte % alphabet.length]
+  }
+  return `PAC-${suffix}`
+}
+
+async function resolveCreatedByNames(ids: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter((id): id is string => Boolean(id)))]
+  const names = new Map<string, string>()
+  if (unique.length === 0) return names
+
+  const { data, error } = await supabase.from('profiles').select('id, full_name').in('id', unique)
+  throwIfError(error)
+
+  for (const row of (data ?? []) as Array<{ id: string; full_name: string | null }>) {
+    const name = row.full_name?.trim()
+    if (name) names.set(row.id, name)
+  }
+  return names
+}
+
+function mapSession(row: SessionRow): Patient['nextSession'] {
+  const { dateLabel, timeLabel } = formatDateTime(row.scheduled_at)
+  return {
+    id: row.id,
+    scheduledAt: row.scheduled_at,
+    dateLabel,
+    timeLabel,
+    type: row.session_type ?? '—',
+    place: row.place ?? '—',
+    status: row.status,
+    notes: row.notes,
+  }
+}
+
+function mapAlert(alert: AlertRow): PatientAlert {
+  return {
+    id: alert.id,
+    message: alert.message,
+    tone: alert.tone,
+    createdAt: alert.created_at,
+    createdById: alert.created_by,
+    createdByName: alert.created_by_name,
+  }
+}
+
+function mapGoal(goal: GoalRow): PatientGoal {
+  const status: GoalStatus =
+    goal.status === 'concluido' || goal.status === 'atingido' || goal.is_done
+      ? 'concluido'
+      : 'em_andamento'
+  return {
+    id: goal.id,
+    title: goal.title,
+    status,
+    createdOn: goal.created_on ?? '',
+    achievedOn: goal.achieved_on,
+    isDone: status === 'concluido',
+  }
+}
+
+function goalPayload(input: UpsertPatientGoalInput) {
+  const status = input.status
+  return {
+    title: input.title.trim(),
+    status,
+    is_done: status === 'concluido',
+    created_on: input.createdOn,
+    achieved_on: emptyToNull(input.achievedOn),
+  }
+}
+
+function pickUpcoming(sessions: SessionRow[]) {
+  const open = sessions.filter(
+    (session) =>
+      (session.status === 'agendada' || session.status === 'confirmada') && session.scheduled_at,
+  )
+  const now = new Date().toISOString()
+  const future = open
+    .filter((session) => (session.scheduled_at as string) >= now)
+    .sort((a, b) => (a.scheduled_at as string).localeCompare(b.scheduled_at as string))
+  if (future[0]) return future[0]
+  return open.sort((a, b) => (b.scheduled_at as string).localeCompare(a.scheduled_at as string))[0]
+}
+
+function pickLastDone(sessions: SessionRow[]) {
+  return sessions
+    .filter((session) => session.status === 'realizada' && session.scheduled_at)
+    .sort((a, b) => (b.scheduled_at ?? '').localeCompare(a.scheduled_at ?? ''))[0]
+}
+
+function countCompletedSessions(sessions: SessionRow[]) {
+  return sessions.filter((session) => session.status === 'realizada').length
+}
+
+function photoUrlFrom(path: string | null | undefined, urls: Map<string, string>): string | null {
+  if (!path) return null
+  return urls.get(path) ?? null
+}
+
+function mapListItem(
+  row: ListPatientRow,
+  sessions: SessionRow[],
+  createdByName: string | null,
+  photoUrls: Map<string, string>,
+): PatientListItem {
+  const upcoming = pickUpcoming(sessions)
+  return {
+    id: row.id,
+    name: row.full_name,
+    initials: initialsFrom(row.full_name),
+    photoTone: row.photo_tone || 'bg-forest',
+    photoUrl: photoUrlFrom(row.photo_path, photoUrls),
+    status: row.status,
+    code: row.code,
+    phone: row.phone ?? '—',
+    program: row.program_name ?? '—',
+    sessionsDone: countCompletedSessions(sessions),
+    sessionsTotal: row.sessions_planned,
+    nextSession: upcoming ? mapSession(upcoming) : null,
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+    createdByName,
+    birthDateRaw: row.birth_date ?? null,
+  }
+}
+
+function mapPatient(
+  row: PatientRow,
+  extras: {
+    goals?: GoalRow[]
+    focus?: FocusRow[]
+    pain?: PainRow[]
+    sessions?: SessionRow[]
+    alerts?: AlertRow[]
+    createdByName?: string | null
+    photoUrls?: Map<string, string>
+  } = {},
+): Patient {
+  const upcoming = pickUpcoming(extras.sessions ?? [])
+
+  return {
+    id: row.id,
+    name: row.full_name,
+    initials: initialsFrom(row.full_name),
+    photoTone: row.photo_tone || 'bg-forest',
+    photoUrl: photoUrlFrom(row.photo_path, extras.photoUrls ?? new Map()),
+    status: row.status,
+    code: row.code,
+    age: ageFrom(row.birth_date),
+    birthDate: formatDate(row.birth_date),
+    birthDateRaw: row.birth_date,
+    startDateRaw: row.treatment_started_on,
+    phone: row.phone ?? '—',
+    email: row.email ?? '—',
+    profession: row.profession ?? '—',
+    cpf: normalizeCpf(row.cpf ?? ''),
+    gender: narrowGender(row.gender),
+    naturalidade: row.naturalidade ?? '—',
+    estadoCivil: row.estado_civil ?? '—',
+    peso: row.peso ?? '—',
+    altura: row.altura ?? '—',
+    enderecoResidencial: row.endereco_residencial ?? '—',
+    enderecoProfissional: row.endereco_profissional ?? '—',
+    emergencyName: row.emergency_name ?? '—',
+    emergencyPhone: row.emergency_phone ?? '—',
+    emergencyRelation: row.emergency_relation ?? '—',
+    adminNotes: row.admin_notes ?? '',
+    referralSource: row.referral_source ?? '—',
+    startDate: formatDate(row.treatment_started_on),
+    sessionsDone: countCompletedSessions(extras.sessions ?? []),
+    sessionsTotal: row.sessions_planned,
+    frequency: row.frequency ?? '—',
+    therapist: row.therapist_name ?? '—',
+    program: row.program_name ?? '—',
+    programProgress: row.program_progress,
+    complaint: row.complaint ?? '—',
+    diagnosis: row.diagnosis ?? '—',
+    eva: row.current_eva,
+    lastVisit: formatDate(row.last_visit_on),
+    aiSummary: row.ai_summary ?? '',
+    aiSummaryFields: narrowAiSummaryFields(row.ai_summary_fields),
+    summaryEdits: narrowSummaryEdits(row.summary_edits),
+    evolutionSummary: row.evolution_summary ?? '',
+    lastConducts: row.last_conducts ?? '',
+    nextSessionPlan: row.next_session_plan ?? '',
+    goals: (extras.goals ?? [])
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map(mapGoal),
+    focusAreas: (extras.focus ?? [])
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .flatMap((area) => {
+        if (area.region_key == null) return []
+        const catalog = getFocusRegion(area.region_key)
+        if (!catalog) return []
+        return [
+          {
+            id: area.id,
+            regionKey: catalog.key,
+            label: catalog.label,
+            isActive: area.is_active,
+          },
+        ]
+      }),
+    painSeries: (extras.pain ?? [])
+      .sort((a, b) => a.recorded_on.localeCompare(b.recorded_on))
+      .map((log) => ({
+        date: log.recorded_on,
+        label: new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(
+          new Date(`${log.recorded_on}T00:00:00`),
+        ),
+        value: log.eva,
+      })),
+    alerts: (extras.alerts ?? []).map(mapAlert),
+    nextSession: upcoming ? mapSession(upcoming) : null,
+    createdBy: row.created_by,
+    createdByName: extras.createdByName ?? null,
+  }
+}
+
+export async function listPatients(): Promise<PatientListItem[]> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select(LIST_COLUMNS)
+    .order('full_name', { ascending: true })
+
+  throwIfError(error)
+
+  const rows = (data ?? []) as ListPatientRow[]
+  if (rows.length === 0) return []
+
+  const ids = rows.map((row) => row.id)
+  const [{ data: sessions, error: sessionsError }, photoUrls] = await Promise.all([
+    supabase
+      .from('patient_sessions')
+      .select('id, patient_id, scheduled_at, session_type, place, status, notes')
+      .in('patient_id', ids),
+    signPatientPhotoUrls(rows.map((row) => row.photo_path)),
+  ])
+
+  throwIfError(sessionsError)
+
+  const sessionsByPatient = new Map<string, SessionRow[]>()
+  for (const session of (sessions ?? []) as Array<SessionRow & { patient_id: string }>) {
+    const list = sessionsByPatient.get(session.patient_id) ?? []
+    list.push(session)
+    sessionsByPatient.set(session.patient_id, list)
+  }
+
+  const nameById = await resolveCreatedByNames(rows.map((row) => row.created_by))
+  return rows.map((row) =>
+    mapListItem(
+      row,
+      sessionsByPatient.get(row.id) ?? [],
+      row.created_by ? (nameById.get(row.created_by) ?? null) : null,
+      photoUrls,
+    ),
+  )
+}
+
+export async function getPatientById(id: string): Promise<Patient | null> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select(DETAIL_COLUMNS)
+    .eq('id', id)
+    .maybeSingle()
+
+  throwIfError(error)
+  if (!data) return null
+
+  const row = data as PatientRow
+
+  const [goals, focus, pain, sessions, alerts, nameById, photoUrls] = await Promise.all([
+    supabase.from('patient_goals').select(GOAL_COLUMNS).eq('patient_id', id),
+    supabase.from('patient_focus_areas').select(FOCUS_COLUMNS).eq('patient_id', id),
+    supabase.from('patient_pain_logs').select('recorded_on, eva').eq('patient_id', id),
+    supabase
+      .from('patient_sessions')
+      .select('id, scheduled_at, session_type, place, status, notes')
+      .eq('patient_id', id),
+    supabase
+      .from('patient_alerts')
+      .select(ALERT_COLUMNS)
+      .eq('patient_id', id)
+      .order('created_at', { ascending: false }),
+    resolveCreatedByNames([row.created_by]),
+    signPatientPhotoUrls([row.photo_path]),
+  ])
+
+  throwIfError(goals.error)
+  throwIfError(focus.error)
+  throwIfError(pain.error)
+  throwIfError(sessions.error)
+  throwIfError(alerts.error)
+
+  return mapPatient(row, {
+    goals: (goals.data ?? []) as GoalRow[],
+    focus: (focus.data ?? []) as FocusRow[],
+    pain: (pain.data ?? []) as PainRow[],
+    sessions: (sessions.data ?? []) as SessionRow[],
+    alerts: (alerts.data ?? []) as AlertRow[],
+    createdByName: row.created_by ? (nameById.get(row.created_by) ?? null) : null,
+    photoUrls,
+  })
+}
+
+export async function getPatientDashboard(id: string): Promise<PatientDashboard | null> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select(DASHBOARD_COLUMNS)
+    .eq('id', id)
+    .maybeSingle()
+
+  throwIfError(error)
+  if (!data) return null
+
+  const row = data as Pick<
+    PatientRow,
+    | 'id'
+    | 'full_name'
+    | 'code'
+    | 'phone'
+    | 'status'
+    | 'photo_tone'
+    | 'photo_path'
+    | 'complaint'
+    | 'diagnosis'
+    | 'treatment_started_on'
+    | 'sessions_done'
+    | 'sessions_planned'
+    | 'last_visit_on'
+    | 'created_by'
+  >
+
+  const [goals, alerts, sessions, nameById, photoUrls] = await Promise.all([
+    supabase
+      .from('patient_goals')
+      .select(GOAL_COLUMNS)
+      .eq('patient_id', id)
+      .eq('is_done', false)
+      .order('sort_order', { ascending: true })
+      .limit(3),
+    supabase
+      .from('patient_alerts')
+      .select(ALERT_COLUMNS)
+      .eq('patient_id', id)
+      .order('created_at', { ascending: false })
+      .limit(40),
+    supabase
+      .from('patient_sessions')
+      .select('id, scheduled_at, session_type, place, status, notes')
+      .eq('patient_id', id)
+      .in('status', ['agendada', 'confirmada', 'realizada']),
+    resolveCreatedByNames([row.created_by]),
+    signPatientPhotoUrls([row.photo_path]),
+  ])
+
+  throwIfError(goals.error)
+  throwIfError(alerts.error)
+  throwIfError(sessions.error)
+
+  const sessionRows = (sessions.data ?? []) as SessionRow[]
+  const next = pickUpcoming(sessionRows)
+  const last = pickLastDone(sessionRows)
+
+  return {
+    id: row.id,
+    name: row.full_name,
+    initials: initialsFrom(row.full_name),
+    photoTone: row.photo_tone || 'bg-forest',
+    photoUrl: photoUrlFrom(row.photo_path, photoUrls),
+    status: row.status,
+    code: row.code,
+    phone: row.phone ?? '—',
+    complaint: row.complaint ?? '—',
+    diagnosis: row.diagnosis ?? '—',
+    startDate: formatDate(row.treatment_started_on),
+    lastSessionLabel: last ? formatDateTime(last.scheduled_at).dateLabel : formatDate(row.last_visit_on),
+    sessionsDone: countCompletedSessions(sessionRows),
+    sessionsTotal: row.sessions_planned,
+    activeGoals: ((goals.data ?? []) as GoalRow[]).map(mapGoal),
+    alerts: ((alerts.data ?? []) as AlertRow[]).map(mapAlert),
+    nextSession: next ? mapSession(next) : null,
+    lastSession: last ? mapSession(last) : null,
+    createdBy: row.created_by,
+    createdByName: row.created_by ? (nameById.get(row.created_by) ?? null) : null,
+  }
+}
+
+export async function createPatient(input: CreatePatientInput): Promise<{ id: string }> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+  throwIfError(userError)
+  if (!user) throw new Error('Sessão expirada. Entre novamente.')
+
+  const id = crypto.randomUUID()
+  const payload = {
+    id,
+    full_name: input.fullName.trim(),
+    code: generatePatientCode(),
+    birth_date: emptyToNull(input.birthDate),
+    phone: emptyToNull(input.phone),
+    email: emptyToNull(input.email)?.toLowerCase() ?? null,
+    profession: emptyToNull(input.profession),
+    emergency_name: emptyToNull(input.emergencyName),
+    emergency_phone: emptyToNull(input.emergencyPhone),
+    emergency_relation: emptyToNull(input.emergencyRelation),
+    admin_notes: emptyToNull(input.adminNotes),
+    referral_source: emptyToNull(input.referralSource),
+    therapist_name: emptyToNull(input.therapistName),
+    status: 'avaliacao' as const,
+    created_by: user.id,
+  }
+
+  // INSERT ... RETURNING applies SELECT RLS to the new row. patients_select
+  // called private.can_read_patient (STABLE), which cannot see the row of the
+  // current command → "new row violates row-level security policy".
+  const { error } = await supabase.from('patients').insert(payload)
+  throwIfError(error)
+  return { id }
+}
+
+export async function updatePatient(id: string, input: UpdatePatientInput): Promise<void> {
+  const payload: Record<string, string | number | null> = {}
+
+  if (input.fullName !== undefined) payload.full_name = input.fullName.trim()
+  if (input.birthDate !== undefined) payload.birth_date = emptyToNull(input.birthDate)
+  if (input.phone !== undefined) payload.phone = emptyToNull(input.phone)
+  if (input.email !== undefined) payload.email = emptyToNull(input.email)?.toLowerCase() ?? null
+  if (input.profession !== undefined) payload.profession = emptyToNull(input.profession)
+  if (input.gender !== undefined) payload.gender = narrowGender(input.gender)
+  if (input.naturalidade !== undefined) payload.naturalidade = emptyToNull(input.naturalidade)
+  if (input.estadoCivil !== undefined) payload.estado_civil = emptyToNull(input.estadoCivil)
+  if (input.peso !== undefined) payload.peso = emptyToNull(input.peso)
+  if (input.altura !== undefined) payload.altura = emptyToNull(input.altura)
+  if (input.enderecoResidencial !== undefined) {
+    payload.endereco_residencial = emptyToNull(input.enderecoResidencial)
+  }
+  if (input.enderecoProfissional !== undefined) {
+    payload.endereco_profissional = emptyToNull(input.enderecoProfissional)
+  }
+  if (input.cpf !== undefined) {
+    const cpfDigits = normalizeCpf(input.cpf)
+    if (cpfDigits !== '' && cpfDigits.length !== 11) throw new Error('CPF inválido. Confira os números.')
+    payload.cpf = cpfDigits || null
+  }
+  if (input.emergencyName !== undefined) payload.emergency_name = emptyToNull(input.emergencyName)
+  if (input.emergencyPhone !== undefined) payload.emergency_phone = emptyToNull(input.emergencyPhone)
+  if (input.emergencyRelation !== undefined) {
+    payload.emergency_relation = emptyToNull(input.emergencyRelation)
+  }
+  if (input.adminNotes !== undefined) payload.admin_notes = emptyToNull(input.adminNotes)
+  if (input.referralSource !== undefined) payload.referral_source = emptyToNull(input.referralSource)
+  if (input.therapistName !== undefined) payload.therapist_name = emptyToNull(input.therapistName)
+  if (input.programName !== undefined) {
+    payload.program_name = emptyToNull(sanitizeText(input.programName, 80))
+  }
+  if (input.status !== undefined) payload.status = input.status
+  if (input.code !== undefined && input.code.trim()) payload.code = input.code.trim()
+  if (input.treatmentStartedOn !== undefined) {
+    payload.treatment_started_on = emptyToNull(input.treatmentStartedOn)
+  }
+  if (input.sessionsTotal !== undefined) payload.sessions_planned = input.sessionsTotal
+  if (input.frequency !== undefined) payload.frequency = emptyToNull(input.frequency)
+  if (input.complaint !== undefined) payload.complaint = emptyToNull(input.complaint)
+  if (input.diagnosis !== undefined) payload.diagnosis = emptyToNull(input.diagnosis)
+  if (input.aiSummary !== undefined) payload.ai_summary = emptyToNull(input.aiSummary)
+
+  if (Object.keys(payload).length === 0) return
+
+  const { data, error } = await supabase.from('patients').update(payload).eq('id', id).select('id')
+  throwIfError(error)
+  if (!data?.length) throw new Error('Não foi possível atualizar este paciente.')
+}
+
+export async function savePatientSummaryEdits(
+  patientId: string,
+  edits: SummaryTexts | null,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('patients')
+    .update({ summary_edits: edits })
+    .eq('id', patientId)
+    .select('id')
+
+  if (error) throw new Error(PATIENT_AI_COPY.editError)
+  if (!data?.length) throw new Error(PATIENT_AI_COPY.editForbidden)
+}
+
+export async function saveGeneratedPatientSummary(
+  patientId: string,
+  summary: string,
+  fields: SummaryTexts,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('patients')
+    .update({
+      ai_summary: summary,
+      ai_summary_fields: { generatedAt: new Date().toISOString(), ...fields },
+      summary_edits: null,
+    })
+    .eq('id', patientId)
+    .select('id')
+
+  if (error) throw new Error(PATIENT_AI_COPY.editError)
+  if (!data?.length) throw new Error(PATIENT_AI_COPY.editForbidden)
+}
+
+export async function createPatientAlert(
+  patientId: string,
+  input: CreatePatientAlertInput,
+): Promise<PatientAlert> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+  throwIfError(userError)
+  if (!user) throw new Error('Sessão expirada. Entre novamente.')
+
+  let authorName: string | null = null
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name')
+    .eq('id', user.id)
+    .maybeSingle()
+  authorName = (profile as { full_name?: string } | null)?.full_name?.trim() || null
+
+  const { data, error } = await supabase
+    .from('patient_alerts')
+    .insert({
+      patient_id: patientId,
+      message: input.message.trim(),
+      tone: input.tone,
+      created_by: user.id,
+      created_by_name: authorName,
+    })
+    .select(ALERT_COLUMNS)
+    .single()
+
+  throwIfError(error)
+  if (!data) throw new Error('Alerta criado sem identificador')
+  return mapAlert(data as AlertRow)
+}
+
+export async function updatePatientAlert(
+  alertId: string,
+  input: UpdatePatientAlertInput,
+): Promise<void> {
+  const { error } = await supabase
+    .from('patient_alerts')
+    .update({
+      message: input.message.trim(),
+      tone: input.tone,
+    })
+    .eq('id', alertId)
+
+  throwIfError(error)
+}
+
+export async function deletePatientAlert(alertId: string): Promise<void> {
+  const { error } = await supabase.from('patient_alerts').delete().eq('id', alertId)
+  throwIfError(error)
+}
+
+export async function createPatientGoal(
+  patientId: string,
+  input: UpsertPatientGoalInput,
+): Promise<PatientGoal> {
+  const { data: existing, error: countError } = await supabase
+    .from('patient_goals')
+    .select('sort_order')
+    .eq('patient_id', patientId)
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  throwIfError(countError)
+  const nextOrder = ((existing as { sort_order?: number } | null)?.sort_order ?? -1) + 1
+
+  const { data, error } = await supabase
+    .from('patient_goals')
+    .insert({
+      patient_id: patientId,
+      sort_order: nextOrder,
+      ...goalPayload(input),
+    })
+    .select(GOAL_COLUMNS)
+    .single()
+
+  throwIfError(error)
+  if (!data) throw new Error('Meta criada sem identificador')
+  return mapGoal(data as GoalRow)
+}
+
+export async function updatePatientGoal(goalId: string, input: UpsertPatientGoalInput): Promise<void> {
+  const { error } = await supabase.from('patient_goals').update(goalPayload(input)).eq('id', goalId)
+  throwIfError(error)
+}
+
+export async function deletePatientGoal(goalId: string): Promise<void> {
+  const { error } = await supabase.from('patient_goals').delete().eq('id', goalId)
+  throwIfError(error)
+}
+
+export async function togglePatientFocusArea(
+  patientId: string,
+  regionKey: string,
+): Promise<'marked' | 'unmarked'> {
+  const key = focusRegionKeySchema.parse(regionKey)
+  const catalog = getFocusRegion(key)
+  if (!catalog) {
+    throw new Error(mapDbError({ code: '23514' }))
+  }
+
+  const { data: existing, error: findError } = await supabase
+    .from('patient_focus_areas')
+    .select('id')
+    .eq('patient_id', patientId)
+    .eq('region_key', key)
+    .maybeSingle()
+  throwIfFocusError(findError)
+
+  const row = existing as { id: string } | null
+  if (row) {
+    const { error: deleteError } = await supabase.from('patient_focus_areas').delete().eq('id', row.id)
+    throwIfFocusError(deleteError)
+    return 'unmarked'
+  }
+
+  const { error: insertError } = await supabase.from('patient_focus_areas').insert({
+    patient_id: patientId,
+    region_key: key,
+    label: catalog.label,
+    is_active: true,
+    sort_order: catalog.sortOrder,
+  })
+  if (insertError?.code === '23505') return 'marked'
+  throwIfFocusError(insertError)
+  return 'marked'
+}

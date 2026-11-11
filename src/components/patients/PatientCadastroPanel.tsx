@@ -1,0 +1,432 @@
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { Pencil } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { Modal } from '@/components/ui/Modal'
+import { Input } from '@/components/ui/Input'
+import { Textarea } from '@/components/ui/Textarea'
+import { Select } from '@/components/ui/Select'
+import { patientGenderOptions } from '@/lib/patientGender'
+import { plannedCount } from '@/components/patients/AttendanceCounts'
+import { useUpdatePatient } from '@/hooks/usePatients'
+import {
+  adminSectionSchema,
+  emergencySectionSchema,
+  personalSectionSchema,
+  treatmentSectionSchema,
+  type AdminSectionFormData,
+  type EmergencySectionFormData,
+  type PersonalSectionFormData,
+  type TreatmentSectionFormData,
+} from '@/schemas/patient.schema'
+import { formatCpf } from '@/lib/cpf'
+import type { Patient, UpdatePatientInput } from '@/types/patient'
+
+type EditSection = 'personal' | 'emergency' | 'admin' | 'treatment' | null
+
+function displayValue(value: string) {
+  return value && value !== '—' ? value : '—'
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs text-muted">{label}</p>
+      <p className="mt-1 text-sm font-medium text-ink">{displayValue(value)}</p>
+    </div>
+  )
+}
+
+function EditableCard({
+  title,
+  onEdit,
+  children,
+  className = '',
+  style,
+}: {
+  title: string
+  onEdit?: () => void
+  children: ReactNode
+  className?: string
+  style?: CSSProperties
+}) {
+  return (
+    <article
+      className={`group relative rounded-2xl border border-line bg-surface p-4 ${className}`}
+      style={style}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">{title}</p>
+        {onEdit ? (
+          <button
+            type="button"
+            aria-label={`Editar ${title}`}
+            onClick={onEdit}
+            className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg text-muted transition hover:bg-accent-soft hover:text-forest"
+          >
+            <Pencil size={16} />
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-3 space-y-3">{children}</div>
+    </article>
+  )
+}
+
+function dash(value: string) {
+  return value === '—' ? '' : value
+}
+
+function FormActions({ onClose, isLoading }: { onClose: () => void; isLoading: boolean }) {
+  return (
+    <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
+      <Button type="button" variant="secondary" onClick={onClose}>
+        Cancelar
+      </Button>
+      <Button type="submit" isLoading={isLoading}>
+        Salvar
+      </Button>
+    </div>
+  )
+}
+
+type PatientCadastroPanelProps = {
+  patient: Patient
+  canWrite?: boolean
+}
+
+export function PatientCadastroPanel({
+  patient,
+  canWrite = true,
+}: PatientCadastroPanelProps) {
+  const update = useUpdatePatient()
+  const [section, setSection] = useState<EditSection>(null)
+
+  const personalForm = useForm<PersonalSectionFormData>({
+    resolver: zodResolver(personalSectionSchema),
+  })
+  const emergencyForm = useForm<EmergencySectionFormData>({
+    resolver: zodResolver(emergencySectionSchema),
+  })
+  const adminForm = useForm<AdminSectionFormData>({
+    resolver: zodResolver(adminSectionSchema),
+  })
+  const treatmentForm = useForm<TreatmentSectionFormData>({
+    resolver: zodResolver(treatmentSectionSchema),
+  })
+
+  useEffect(() => {
+    if (!section) return
+    if (section === 'personal') {
+      personalForm.reset({
+        birthDate: patient.birthDateRaw ?? '',
+        phone: dash(patient.phone),
+        profession: dash(patient.profession),
+        cpf: formatCpf(patient.cpf),
+        gender: patient.gender ?? '',
+        email: dash(patient.email),
+        naturalidade: dash(patient.naturalidade),
+        estadoCivil: dash(patient.estadoCivil),
+        peso: dash(patient.peso),
+        altura: dash(patient.altura),
+        enderecoResidencial: dash(patient.enderecoResidencial),
+        enderecoProfissional: dash(patient.enderecoProfissional),
+      })
+    }
+    if (section === 'emergency') {
+      emergencyForm.reset({
+        emergencyName: dash(patient.emergencyName),
+        emergencyPhone: dash(patient.emergencyPhone),
+        emergencyRelation: dash(patient.emergencyRelation),
+      })
+    }
+    if (section === 'admin') {
+      adminForm.reset({
+        therapistName: dash(patient.therapist),
+        referralSource: dash(patient.referralSource),
+        adminNotes: patient.adminNotes,
+      })
+    }
+    if (section === 'treatment') {
+      treatmentForm.reset({
+        treatmentStartedOn: patient.startDateRaw ?? '',
+        sessionsTotal: patient.sessionsTotal > 0 ? patient.sessionsTotal : '',
+        frequency: dash(patient.frequency),
+      })
+    }
+  }, [patient, section, personalForm, emergencyForm, adminForm, treatmentForm])
+
+  function save(input: UpdatePatientInput) {
+    update.mutate({ id: patient.id, input }, { onSuccess: () => setSection(null) })
+  }
+
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <EditableCard title="Pessoais" onEdit={canWrite ? () => setSection('personal') : undefined}>
+          <Field label="Data de nascimento" value={patient.birthDate} />
+          <Field label="Telefone / Contato" value={patient.phone} />
+          <Field label="E-mail" value={patient.email} />
+          <Field
+            label="Sexo / Gênero"
+            value={patientGenderOptions.find((o) => o.value === (patient.gender ?? '') && o.value !== '')?.label ?? '—'}
+          />
+          <Field label="Estado civil" value={patient.estadoCivil} />
+          <Field label="Naturalidade" value={patient.naturalidade} />
+          <Field label="Profissão" value={patient.profession} />
+          <Field label="Peso (kg)" value={patient.peso} />
+          <Field label="Altura" value={patient.altura} />
+          <Field label="CPF" value={patient.cpf ? formatCpf(patient.cpf) : ''} />
+          <Field label="Endereço residencial" value={patient.enderecoResidencial} />
+          <Field label="Endereço profissional" value={patient.enderecoProfissional} />
+        </EditableCard>
+        <EditableCard title="Emergência" onEdit={canWrite ? () => setSection('emergency') : undefined}>
+          <Field label="Nome" value={patient.emergencyName} />
+          <Field label="Telefone" value={patient.emergencyPhone} />
+          <Field label="Parentesco" value={patient.emergencyRelation} />
+        </EditableCard>
+        <EditableCard title="Administrativo" onEdit={canWrite ? () => setSection('admin') : undefined}>
+          <Field label="Fisioterapeuta" value={patient.therapist} />
+          <Field label="Origem" value={patient.referralSource} />
+        </EditableCard>
+        <EditableCard title="Tratamento" onEdit={canWrite ? () => setSection('treatment') : undefined}>
+          <Field label="Início" value={patient.startDate} />
+          <Field label="Feitos" value={String(patient.sessionsDone)} />
+          <Field
+            label="Planejados"
+            value={patient.sessionsTotal > 0 ? String(patient.sessionsTotal) : '—'}
+          />
+          <Field label="Frequência" value={patient.frequency} />
+        </EditableCard>
+      </div>
+
+      <EditableCard
+        title="Observações administrativas"
+        onEdit={canWrite ? () => setSection('admin') : undefined}
+        className="mt-4"
+      >
+        <p className="whitespace-pre-wrap text-sm leading-6 text-ink">
+          {patient.adminNotes || 'Nenhuma observação ainda.'}
+        </p>
+      </EditableCard>
+
+      {canWrite ? (
+        <>
+      <Modal
+        open={section === 'personal'}
+        title="Dados pessoais"
+        description="Identificação, dados pessoais e endereço do paciente."
+        onClose={() => setSection(null)}
+      >
+        <form
+          className="space-y-4"
+          onSubmit={personalForm.handleSubmit((values) =>
+            save({
+              birthDate: values.birthDate,
+              phone: values.phone,
+              profession: values.profession,
+              cpf: values.cpf ?? '',
+              gender: values.gender,
+              email: values.email,
+              naturalidade: values.naturalidade,
+              estadoCivil: values.estadoCivil,
+              peso: values.peso,
+              altura: values.altura,
+              enderecoResidencial: values.enderecoResidencial,
+              enderecoProfissional: values.enderecoProfissional,
+            }),
+          )}
+        >
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Input
+              label="Data de nascimento"
+              type="date"
+              error={personalForm.formState.errors.birthDate?.message}
+              {...personalForm.register('birthDate')}
+            />
+            <Input
+              label="Telefone / Contato"
+              type="tel"
+              error={personalForm.formState.errors.phone?.message}
+              {...personalForm.register('phone')}
+            />
+            <Select
+              label="Sexo / Gênero"
+              options={patientGenderOptions}
+              error={personalForm.formState.errors.gender?.message}
+              {...personalForm.register('gender')}
+            />
+            <Input
+              label="Estado civil"
+              error={personalForm.formState.errors.estadoCivil?.message}
+              {...personalForm.register('estadoCivil')}
+            />
+            <Input
+              label="Naturalidade"
+              error={personalForm.formState.errors.naturalidade?.message}
+              {...personalForm.register('naturalidade')}
+            />
+            <Input
+              label="Profissão"
+              error={personalForm.formState.errors.profession?.message}
+              {...personalForm.register('profession')}
+            />
+            <Input
+              label="Peso (kg)"
+              error={personalForm.formState.errors.peso?.message}
+              {...personalForm.register('peso')}
+            />
+            <Input
+              label="Altura (m ou cm)"
+              error={personalForm.formState.errors.altura?.message}
+              {...personalForm.register('altura')}
+            />
+            <Input
+              label="CPF (opcional)"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="000.000.000-00"
+              maxLength={14}
+              error={personalForm.formState.errors.cpf?.message}
+              {...personalForm.register('cpf', {
+                onChange: (e) => personalForm.setValue('cpf', formatCpf(e.target.value)),
+              })}
+            />
+            <Input
+              label="E-mail"
+              type="email"
+              error={personalForm.formState.errors.email?.message}
+              {...personalForm.register('email')}
+            />
+          </div>
+          <Textarea
+            label="Endereço residencial"
+            rows={2}
+            error={personalForm.formState.errors.enderecoResidencial?.message}
+            {...personalForm.register('enderecoResidencial')}
+          />
+          <Textarea
+            label="Endereço profissional"
+            rows={2}
+            error={personalForm.formState.errors.enderecoProfissional?.message}
+            {...personalForm.register('enderecoProfissional')}
+          />
+          <FormActions onClose={() => setSection(null)} isLoading={update.isPending} />
+        </form>
+      </Modal>
+
+      <Modal
+        open={section === 'emergency'}
+        title="Contato de emergência"
+        description="Quem acionar em caso de urgência."
+        onClose={() => setSection(null)}
+      >
+        <form
+          className="space-y-4"
+          onSubmit={emergencyForm.handleSubmit((values) =>
+            save({
+              emergencyName: values.emergencyName,
+              emergencyPhone: values.emergencyPhone,
+              emergencyRelation: values.emergencyRelation,
+            }),
+          )}
+        >
+          <Input
+            label="Nome"
+            error={emergencyForm.formState.errors.emergencyName?.message}
+            {...emergencyForm.register('emergencyName')}
+          />
+          <Input
+            label="Telefone"
+            type="tel"
+            error={emergencyForm.formState.errors.emergencyPhone?.message}
+            {...emergencyForm.register('emergencyPhone')}
+          />
+          <Input
+            label="Parentesco"
+            error={emergencyForm.formState.errors.emergencyRelation?.message}
+            {...emergencyForm.register('emergencyRelation')}
+          />
+          <FormActions onClose={() => setSection(null)} isLoading={update.isPending} />
+        </form>
+      </Modal>
+
+      <Modal
+        open={section === 'admin'}
+        title="Administrativo"
+        description="Fisioterapeuta, origem e observações."
+        onClose={() => setSection(null)}
+      >
+        <form
+          className="space-y-4"
+          onSubmit={adminForm.handleSubmit((values) =>
+            save({
+              therapistName: values.therapistName,
+              referralSource: values.referralSource,
+              adminNotes: values.adminNotes,
+            }),
+          )}
+        >
+          <Input
+            label="Fisioterapeuta"
+            error={adminForm.formState.errors.therapistName?.message}
+            {...adminForm.register('therapistName')}
+          />
+          <Input
+            label="Origem / indicação"
+            error={adminForm.formState.errors.referralSource?.message}
+            {...adminForm.register('referralSource')}
+          />
+          <Textarea
+            label="Observações administrativas"
+            error={adminForm.formState.errors.adminNotes?.message}
+            {...adminForm.register('adminNotes')}
+          />
+          <FormActions onClose={() => setSection(null)} isLoading={update.isPending} />
+        </form>
+      </Modal>
+
+      <Modal
+        open={section === 'treatment'}
+        title="Tratamento"
+        description="Início, sessões e frequência."
+        onClose={() => setSection(null)}
+      >
+        <form
+          className="space-y-4"
+          onSubmit={treatmentForm.handleSubmit((values) =>
+            save({
+              treatmentStartedOn: values.treatmentStartedOn,
+              sessionsTotal: plannedCount(values.sessionsTotal),
+              frequency: values.frequency,
+            }),
+          )}
+        >
+          <Input
+            label="Início do tratamento"
+            type="date"
+            error={treatmentForm.formState.errors.treatmentStartedOn?.message}
+            {...treatmentForm.register('treatmentStartedOn')}
+          />
+          <Input
+            label="Sessões planejadas"
+            type="number"
+            min={0}
+            hint="Opcional. As feitas acompanham as sessões concluídas."
+            error={treatmentForm.formState.errors.sessionsTotal?.message}
+            {...treatmentForm.register('sessionsTotal')}
+          />
+          <Input
+            label="Frequência"
+            error={treatmentForm.formState.errors.frequency?.message}
+            {...treatmentForm.register('frequency')}
+          />
+          <FormActions onClose={() => setSection(null)} isLoading={update.isPending} />
+        </form>
+      </Modal>
+        </>
+      ) : null}
+    </>
+  )
+}

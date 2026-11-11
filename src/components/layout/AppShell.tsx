@@ -1,0 +1,230 @@
+import { Suspense, useEffect, useState } from 'react'
+import { NavLink, Outlet } from 'react-router-dom'
+import { CircleUser, LogOut, Menu, X } from 'lucide-react'
+import { clinicNavigationItems, mobileNavItems } from '@/config/navigation'
+import { BrandWordmark } from '@/components/brand/BrandWordmark'
+import { useAuth } from '@/hooks/useAuth'
+import { accountTypeLabel } from '@/lib/accountAccess'
+import { signAccountAvatarUrl } from '@/services/accountPhoto.service'
+
+export function AppShell() {
+  const { profile, user, signOut } = useAuth()
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const displayName = profile?.fullName ?? user?.user_metadata.full_name ?? 'Usuário'
+  const initials = displayName
+    .split(' ')
+    .slice(0, 2)
+    .map((part: string) => part[0])
+    .join('')
+    .toUpperCase()
+  const roleLabel = profile ? accountTypeLabel(profile.accountType) : (user?.email ?? '')
+  const drawerItems = clinicNavigationItems(profile?.accountType)
+  const avatarPath =
+    typeof profile?.avatarUrl === 'string' && profile.avatarUrl.length > 0 ? profile.avatarUrl : null
+  const [avatarSrc, setAvatarSrc] = useState<string | null>(null)
+  const [avatarBroken, setAvatarBroken] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setAvatarBroken(false)
+    if (!avatarPath) {
+      setAvatarSrc(null)
+      return
+    }
+    void signAccountAvatarUrl(avatarPath)
+      .then((url) => {
+        if (!cancelled) setAvatarSrc(url)
+      })
+      .catch(() => {
+        if (!cancelled) setAvatarSrc(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [avatarPath])
+
+  return (
+    <div className="min-h-dvh bg-canvas text-ink lg:h-dvh lg:overflow-clip lg:bg-forest">
+      {isMenuOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          className="fixed inset-0 z-30 bg-forest/50 backdrop-blur-[3px] lg:hidden"
+          onClick={() => setIsMenuOpen(false)}
+        />
+      )}
+
+      <aside
+        className={[
+          'fixed inset-y-0 left-0 z-40 flex w-72 flex-col bg-forest text-white transition-transform duration-200',
+          isMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+        ].join(' ')}
+      >
+        <div className="flex h-[5.5rem] items-center justify-between px-5">
+          <BrandWordmark
+            size="sm"
+            variant="onDark"
+            showTagline={false}
+            asLink
+            to="/painel"
+            onClick={() => setIsMenuOpen(false)}
+          />
+          <button
+            type="button"
+            aria-label="Fechar menu"
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl p-2 text-white/60 hover:bg-white/10 lg:hidden"
+            onClick={() => setIsMenuOpen(false)}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <nav className="nav-scroll flex-1 overflow-y-auto px-3 py-2" aria-label="Navegação principal">
+          <div className="space-y-1">
+            {drawerItems.map(({ label, path, icon: Icon }) => (
+              <NavLink
+                key={path}
+                to={path}
+                end={path === '/painel'}
+                onClick={() => setIsMenuOpen(false)}
+                className={({ isActive }) =>
+                  [
+                    'flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-white/10 text-white'
+                      : 'text-white/60 hover:bg-white/[0.06] hover:text-white',
+                  ].join(' ')
+                }
+              >
+                <Icon size={18} strokeWidth={1.7} />
+                {label}
+              </NavLink>
+            ))}
+          </div>
+        </nav>
+
+        <div className="p-4">
+          <div className="group flex items-center gap-3 rounded-2xl bg-white/10 p-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent/20 text-xs font-semibold text-accent">
+              {avatarSrc && !avatarBroken ? (
+                <img
+                  src={avatarSrc}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  onError={() => setAvatarBroken(true)}
+                />
+              ) : (
+                initials || 'U'
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">{displayName}</p>
+              <p className="truncate text-xs text-white/45">{roleLabel}</p>
+            </div>
+            <NavLink
+              to="/conta"
+              aria-label="Minha conta"
+              title="Minha conta"
+              onClick={() => setIsMenuOpen(false)}
+              className={({ isActive }) =>
+                [
+                  'flex shrink-0 items-center justify-center overflow-hidden rounded-xl transition-all duration-200',
+                  isActive
+                    ? 'min-h-11 min-w-11 bg-white/10 p-2 text-white'
+                    : [
+                        'pointer-events-none w-0 min-w-0 p-0 text-white/40 opacity-0',
+                        'hover:bg-white/10 hover:text-white',
+                        'group-hover:pointer-events-auto group-hover:w-11 group-hover:min-h-11 group-hover:min-w-11 group-hover:p-2 group-hover:opacity-100',
+                        'group-focus-within:pointer-events-auto group-focus-within:w-11 group-focus-within:min-h-11 group-focus-within:min-w-11 group-focus-within:p-2 group-focus-within:opacity-100',
+                        '[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:w-11 [@media(hover:none)]:min-h-11 [@media(hover:none)]:min-w-11 [@media(hover:none)]:p-2 [@media(hover:none)]:opacity-100',
+                      ].join(' '),
+                ].join(' ')
+              }
+            >
+              <CircleUser size={17} aria-hidden="true" />
+            </NavLink>
+            <button
+              type="button"
+              aria-label="Sair"
+              title="Sair"
+              onClick={() => void signOut()}
+              className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-xl p-2 text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <LogOut size={17} />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div className="lg:ml-72 lg:flex lg:h-dvh lg:flex-col lg:p-2.5">
+        <div className="min-h-dvh bg-canvas lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-clip lg:rounded-[1.15rem] lg:bg-surface">
+          <div className="panel-scroll min-h-dvh lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-y-auto">
+            <header className="sticky top-0 z-20 flex items-center gap-3 bg-canvas/90 px-4 py-3 backdrop-blur-md lg:hidden">
+              <button
+                type="button"
+                aria-label="Abrir menu"
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-line bg-surface p-2 text-ink/70"
+                onClick={() => setIsMenuOpen(true)}
+              >
+                <Menu size={20} />
+              </button>
+              <BrandWordmark size="sm" variant="onLight" showTagline={false} asLink to="/painel" />
+            </header>
+
+            {/*
+              Desktop: o main tem a altura da tela e o conteúdo longo transborda dele,
+              então padding-bottom não aparece no fim da rolagem. O ::after é o último
+              filho do fluxo e garante 16px depois do último conteúdo em toda página.
+            */}
+            <main className="px-4 py-6 pb-24 lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:px-6 lg:pb-0 lg:pt-6 lg:after:block lg:after:h-4 lg:after:shrink-0 lg:after:content-['']">
+              <Suspense
+                fallback={
+                  <div className="flex justify-center py-16">
+                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-forest border-t-transparent" />
+                  </div>
+                }
+              >
+                <Outlet />
+              </Suspense>
+            </main>
+          </div>
+        </div>
+      </div>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-30 px-5 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden"
+        aria-label="Navegação móvel"
+      >
+        <div className="relative mx-auto flex max-w-md items-center justify-around rounded-full bg-forest px-1.5 py-1 shadow-[0_10px_24px_rgba(11,29,54,0.28)]">
+          {mobileNavItems.map(({ label, path, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={path}
+              end={path === '/painel'}
+              className={({ isActive }) =>
+                [
+                  'flex min-h-11 min-w-[3.25rem] flex-col items-center justify-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] font-medium transition-colors',
+                  isActive ? 'text-accent' : 'text-white/50',
+                ].join(' ')
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <span
+                    className={[
+                      'flex h-6 w-6 items-center justify-center rounded-full transition-colors',
+                      isActive ? 'bg-white/12' : '',
+                    ].join(' ')}
+                  >
+                    <Icon size={16} strokeWidth={isActive ? 2.1 : 1.7} />
+                  </span>
+                  {label}
+                </>
+              )}
+            </NavLink>
+          ))}
+        </div>
+      </nav>
+    </div>
+  )
+}

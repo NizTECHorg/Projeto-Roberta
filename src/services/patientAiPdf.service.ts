@@ -1,0 +1,2435 @@
+import {
+  BlendMode,
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  LineCapStyle,
+  type PDFFont,
+  type PDFImage,
+  type PDFPage,
+  type RGB,
+} from 'pdf-lib'
+import logoUrl from '@/assets/brand/logo.png'
+import { tamanhoLogo, xAlinhado, type PdfLogoAlign } from '@/lib/pdfBrand'
+import { loadPdfBrand, type PdfBrandAssets } from '@/services/pdfBranding.service'
+import corpoFemininoUrl from '@/assets/corpo-feminino.png'
+import corpoMasculinoUrl from '@/assets/corpo-masculino.png'
+import pessoaUrl from '@/assets/homi.png'
+import pessoaFemininaUrl from '@/assets/muir.png'
+import type { EvaluationFicha } from '@/schemas/evaluationFicha.schema'
+import { ATIVIDADES, formatAtividadeFisica, formatMiolo } from '@/lib/atividadeCapacidade'
+import { resumoEsportes } from '@/lib/esportesAvaliacao'
+import {
+  formatAchado,
+  formatCabecalhoRegiao,
+  formatLinhaMovimento,
+  formatTeste,
+} from '@/lib/mobilidadePalpacao'
+import { FOCUS_REGIONS, listFocusRegionsByView, type FocusRegionKey } from '@/lib/focusRegions'
+import type { PdfFieldId } from '@/lib/pdfFieldCatalog'
+import { isSafeSignaturePath, signaturePdfScale } from '@/lib/signaturePath'
+import { agruparForca } from '@/lib/forcaRegioes'
+import { formatTesteFuncional } from '@/lib/testesFuncionais'
+import {
+  bodyDrawingVersion,
+  bodyDrawingViewBox,
+  type BodyDrawingBox,
+  infoDaCor,
+  type CorPersonalizada,
+  bodyDrawingFigure,
+  bodyDrawingWidthInfo,
+  safeBodyStrokes,
+  usedBodyDrawingColors,
+  type BodyDrawingStroke,
+} from '@/lib/bodyDrawing'
+import type { PatientGoal, PatientFocusArea, SessionEvolution } from '@/types/patient'
+
+/** A4 */
+const PAGE_WIDTH = 595.28
+const PAGE_HEIGHT = 841.89
+const MARGIN_X = 48
+const MARGIN_BOTTOM = 52
+const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2
+
+/** Brand + ficha-ref tokens (navy / sage / soft border — D-05) */
+const COLORS_PADRAO = {
+  forest: rgb(0x0b / 255, 0x1d / 255, 0x36 / 255),
+  navy: rgb(0x1a / 255, 0x36 / 255, 0x5d / 255),
+  sage: rgb(0x5f / 255, 0x7f / 255, 0x6b / 255),
+  accent: rgb(0x2f / 255, 0x7d / 255, 0xff / 255),
+  accentSoft: rgb(0xe7 / 255, 0xf0 / 255, 0xfb / 255),
+  border: rgb(0xb8 / 255, 0xc9 / 255, 0xde / 255),
+  canvas: rgb(0xf3 / 255, 0xf5 / 255, 0xf8 / 255),
+  ink: rgb(0x10 / 255, 0x20 / 255, 0x38 / 255),
+  muted: rgb(0x5a / 255, 0x6b / 255, 0x80 / 255),
+  line: rgb(0xe1 / 255, 0xe8 / 255, 0xf0 / 255),
+  white: rgb(1, 1, 1),
+  danger: rgb(0xb9 / 255, 0x3c / 255, 0x3c / 255),
+} as const
+
+/**
+ * Paleta em uso. Troca pela cor da conta (Minha empresa / Meu escritório) no início de cada
+ * geração e volta ao padrão no fim — um PDF é gerado por vez no navegador.
+ */
+let COLORS: { [K in keyof typeof COLORS_PADRAO]: (typeof COLORS_PADRAO)[K] } = COLORS_PADRAO
+
+const SIZE = {
+  title: 16,
+  chapter: 14,
+  section: 9,
+  body: 9.5,
+  meta: 8.5,
+  footer: 8,
+  label: 8,
+} as const
+
+const LINE = {
+  body: 13,
+  meta: 11,
+  section: 13,
+} as const
+
+/** Snapshot clínico para PDF geral (sem Gemini — A5). */
+export interface PatientAiGeralPdfInput {
+  kind: 'geral'
+  name: string
+  code: string
+  complaint: string
+  diagnosis: string
+  program: string
+  eva: number
+  goals: PatientGoal[]
+  focusAreas: PatientFocusArea[]
+  aiSummary: string
+  evolutionHighlights?: string
+}
+
+/** Snapshot de sessão para PDF por sessão (sem Gemini — A5). */
+export interface PatientAiSessaoPdfInput {
+  kind: 'sessao'
+  name: string
+  code: string
+  sessionLabel: string
+  sessionDateLabel?: string
+  sessionTimeLabel?: string
+  evolution: Pick<
+    SessionEvolution,
+    'patientState' | 'changesSinceLast' | 'conducts' | 'treatmentResponse' | 'incidents' | 'nextPlan'
+  > & { sideEffects?: string | null } | null
+}
+
+/** Ficha musculoesquelética 01–04 (D-07) — sem Gemini. */
+export interface PatientAiAvaliacaoPdfInput {
+  kind: 'avaliacao'
+  name: string
+  code: string
+  performedOnLabel: string
+  /** Nome livre da avaliação (opcional). */
+  evaluationTitle?: string | null
+  therapistName?: string | null
+  ficha: EvaluationFicha
+  /** When set, only these filled block ids render (D-02/D-03). Omitted = all filled. */
+  selectedFieldIds?: ReadonlySet<PdfFieldId>
+}
+
+/** Evolução multi-sessão + síntese IA (D-04) — sem Gemini no builder. */
+export interface PatientAiEvolucaoPdfInput {
+  kind: 'evolucao'
+  name: string
+  code: string
+  sessionLabel: string
+  sessions: Array<{
+    id: string
+    dateLabel: string
+    timeLabel?: string
+    evolution: Pick<
+      SessionEvolution,
+      | 'patientState'
+      | 'changesSinceLast'
+      | 'conducts'
+      | 'treatmentResponse'
+      | 'incidents'
+      | 'nextPlan'
+    > & { sideEffects?: string | null } | null
+  }>
+  synthesis: {
+    sintese: string
+    tendencias?: string
+    condutasAgregadas?: string
+    alertas?: string
+  }
+  selectedFieldIds?: ReadonlySet<PdfFieldId>
+}
+
+export type BuildPatientAiReportPdfInput =
+  | PatientAiGeralPdfInput
+  | PatientAiSessaoPdfInput
+  | PatientAiAvaliacaoPdfInput
+  | PatientAiEvolucaoPdfInput
+
+const BODY_MAP_GLYPH: Record<string, string> = {
+  X: 'X',
+  hatch: '////',
+  O: 'O',
+  arrow: '^',
+  star: '*',
+}
+
+/** Hand-tuned centroids in FOCUS_REGIONS viewBox 0 0 140 240 (SVG Y down). */
+const BODY_MAP_CENTROIDS: Record<FocusRegionKey, { x: number; y: number }> = {
+  'front.head': { x: 70, y: 24 },
+  'front.neck': { x: 70, y: 46 },
+  'front.shoulder_l': { x: 96, y: 61 },
+  'front.shoulder_r': { x: 44, y: 61 },
+  'front.chest': { x: 70, y: 78 },
+  'front.abdomen': { x: 70, y: 108 },
+  'front.upper_arm_l': { x: 96, y: 91 },
+  'front.upper_arm_r': { x: 44, y: 91 },
+  'front.forearm_l': { x: 96.5, y: 131 },
+  'front.forearm_r': { x: 43.5, y: 131 },
+  'front.palm_l': { x: 96.75, y: 164 },
+  'front.palm_r': { x: 43.25, y: 164 },
+  'front.hip': { x: 70, y: 138 },
+  'front.thigh_l': { x: 84, y: 168 },
+  'front.thigh_r': { x: 56, y: 168 },
+  'front.knee_l': { x: 79.5, y: 195 },
+  'front.knee_r': { x: 60.5, y: 195 },
+  'front.shin_l': { x: 79.5, y: 205 },
+  'front.shin_r': { x: 60.5, y: 205 },
+  'front.foot_l': { x: 84, y: 226 },
+  'front.foot_r': { x: 56, y: 226 },
+  'back.neck': { x: 70, y: 46 },
+  'back.shoulder_l': { x: 96, y: 61 },
+  'back.shoulder_r': { x: 44, y: 61 },
+  'back.upper': { x: 70, y: 82 },
+  'back.lumbar': { x: 70, y: 112 },
+  'back.glute_l': { x: 84, y: 142 },
+  'back.glute_r': { x: 56, y: 142 },
+  'back.upper_arm_l': { x: 44, y: 91 },
+  'back.upper_arm_r': { x: 96, y: 91 },
+  'back.forearm_l': { x: 43.5, y: 131 },
+  'back.forearm_r': { x: 96.5, y: 131 },
+  'back.hand_l': { x: 43.25, y: 164 },
+  'back.hand_r': { x: 96.75, y: 164 },
+  'back.thigh_l': { x: 84, y: 172 },
+  'back.thigh_r': { x: 56, y: 172 },
+  'back.knee_l': { x: 60.5, y: 195 },
+  'back.knee_r': { x: 79.5, y: 195 },
+  'back.calf_l': { x: 60.5, y: 205 },
+  'back.calf_r': { x: 79.5, y: 205 },
+  'back.ankle_l': { x: 56, y: 226 },
+  'back.ankle_r': { x: 84, y: 226 },
+}
+
+/**
+ * WinAnsi (Helvetica) cobre áéíóúãõç — Pitfall 9 sem pacote fontkit extra.
+ * Substitui caracteres fora de WinAnsi para evitar throw do pdf-lib.
+ */
+function toWinAnsiSafe(text: string): string {
+  return text
+    .normalize('NFC')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/\u2013|\u2014/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/[^\t\n\r\x20-\x7E\xA0-\xFF]/g, '?')
+}
+
+function wrapLines(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+  const safe = toWinAnsiSafe(text.trim() || '—')
+  const paragraphs = safe.split(/\r?\n/)
+  const lines: string[] = []
+
+  for (const paragraph of paragraphs) {
+    if (!paragraph.trim()) {
+      lines.push('')
+      continue
+    }
+    const words = paragraph.split(/\s+/)
+    let current = ''
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word
+      if (font.widthOfTextAtSize(next, size) <= maxWidth) {
+        current = next
+      } else {
+        if (current) lines.push(current)
+        // Long token without spaces — hard-break by width
+        if (font.widthOfTextAtSize(word, size) > maxWidth) {
+          let chunk = ''
+          for (const ch of word) {
+            const tryChunk = chunk + ch
+            if (font.widthOfTextAtSize(tryChunk, size) <= maxWidth) {
+              chunk = tryChunk
+            } else {
+              if (chunk) lines.push(chunk)
+              chunk = ch
+            }
+          }
+          current = chunk
+        } else {
+        current = word
+        }
+      }
+    }
+    if (current) lines.push(current)
+  }
+
+  return lines.length > 0 ? lines : ['—']
+}
+
+function formatGeneratedAt(date = new Date()): string {
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+type DrawContext = {
+  doc: PDFDocument
+  page: PDFPage
+  font: PDFFont
+  bold: PDFFont
+  /** Serif chapter titles (StandardFonts.TimesRomanBold — no fontkit). */
+  timesBold: PDFFont
+  /** Logo do cabeçalho (da conta ou a do Fluxo); null = escreve o nome da conta no lugar. */
+  logo: PDFImage | null
+  /** Nome da conta nos PDFs (Minha empresa / Meu escritório); null = Fluxo. */
+  brandName: string | null
+  /** Altura da logo escolhida pela conta (pt); null = tamanho original do layout. */
+  logoSize: number | null
+  logoAlign: PdfLogoAlign
+  y: number
+  pageIndex: number
+  docTitle: string
+  patientLine: string
+  generatedAt: string
+  /** Left inset for body content (inside ficha blocks). */
+  contentX: number
+  contentW: number
+  footerKind: 'fluxo' | 'ficha'
+  /** Filled evaluation date, when the ficha has one. */
+  fichaDate?: string
+  /** Filled therapist name, when the ficha has one. */
+  fichaTherapist?: string
+  /** Figura do mapa de sintomas (05), embutida só quando há traços. */
+  bodyImage?: PDFImage
+}
+
+function drawFooter(ctx: DrawContext) {
+  const footerY = 28
+  ctx.page.drawLine({
+    start: { x: MARGIN_X, y: footerY + 14 },
+    end: { x: PAGE_WIDTH - MARGIN_X, y: footerY + 14 },
+    thickness: 0.5,
+    color: COLORS.border,
+  })
+  if (ctx.footerKind === 'ficha') {
+    // Rodapé discreto: nome da conta e número da página pequenos.
+    const footerSize = 9
+    ctx.page.drawText(toWinAnsiSafe(ctx.brandName ?? 'Fluxo'), {
+      x: MARGIN_X,
+      y: footerY,
+      size: footerSize,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+    const pageLabel = String(ctx.pageIndex)
+    const pageW = ctx.font.widthOfTextAtSize(pageLabel, footerSize)
+    ctx.page.drawText(pageLabel, {
+      x: PAGE_WIDTH - MARGIN_X - pageW,
+      y: footerY,
+      size: footerSize,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+    return
+  }
+  const left = `${ctx.brandName ?? 'FLUXO'} · Documento clínico`
+  ctx.page.drawText(toWinAnsiSafe(left), {
+    x: MARGIN_X,
+    y: footerY,
+    size: SIZE.footer,
+    font: ctx.font,
+    color: COLORS.muted,
+  })
+  const pageLabel = `Pág. ${ctx.pageIndex}`
+  const pageW = ctx.font.widthOfTextAtSize(pageLabel, SIZE.footer)
+  ctx.page.drawText(pageLabel, {
+    x: PAGE_WIDTH - MARGIN_X - pageW,
+    y: footerY,
+    size: SIZE.footer,
+    font: ctx.font,
+    color: COLORS.muted,
+  })
+}
+
+/** Logo da conta (ou do Fluxo) sem distorcer; sem logo, o nome da conta em destaque. */
+/**
+ * Logo da conta (ou do Fluxo) sem distorcer, na posição escolhida (esquerda, centro ou direita);
+ * sem logo, o nome da conta em destaque. Devolve a área ocupada, para o título desviar dela.
+ */
+function drawBrandMark(
+  ctx: DrawContext,
+  y: number,
+  altura: number,
+  larguraMax: number,
+  align: PdfLogoAlign = 'left',
+): { x: number; width: number } {
+  if (ctx.logo) {
+    const { width, height } = tamanhoLogo(ctx.logo.width, ctx.logo.height, altura, larguraMax)
+    const x = xAlinhado(align, width, MARGIN_X, PAGE_WIDTH)
+    ctx.page.drawImage(ctx.logo, { x, y: y + (altura - height) / 2, width, height })
+    return { x, width }
+  }
+  const nome = toWinAnsiSafe(ctx.brandName ?? 'Fluxo')
+  const size = Math.min(Math.max(18, altura * 0.45), altura * 0.8)
+  const width = ctx.bold.widthOfTextAtSize(nome, size)
+  const x = xAlinhado(align, width, MARGIN_X, PAGE_WIDTH)
+  ctx.page.drawText(nome, { x, y: y + (altura - size) / 2 + 2, size, font: ctx.bold, color: COLORS.forest })
+  return { x, width }
+}
+
+function drawHeaderBand(ctx: DrawContext, opts: { isFirstPage: boolean }) {
+  if (ctx.footerKind === 'ficha') {
+    const logoH = ctx.logoSize ?? 32
+    const logoBottom = PAGE_HEIGHT - 48 - logoH
+    drawBrandMark(ctx, logoBottom, logoH, CONTENT_WIDTH * 0.75, ctx.logoAlign)
+
+    const title = ctx.docTitle.startsWith('Evolução') ? 'Evolução' : 'Avaliação'
+    let cursor = logoBottom - 16 - 20
+  ctx.page.drawText(toWinAnsiSafe(title), {
+      x: MARGIN_X,
+      y: cursor,
+      size: 20,
+    font: ctx.bold,
+      color: COLORS.ink,
+    })
+    const barH = 4
+    const barBottom = cursor - 8 - barH
+    ctx.page.drawRectangle({
+      x: MARGIN_X,
+      y: barBottom,
+      width: 48,
+      height: 4,
+      color: COLORS.accent,
+    })
+    cursor = barBottom
+
+    if (opts.isFirstPage) {
+      const name = ctx.patientLine.trim()
+      if (name) {
+        cursor -= 8 + 16
+        ctx.page.drawText(toWinAnsiSafe(name), {
+          x: MARGIN_X,
+          y: cursor,
+          size: 16,
+          font: ctx.font,
+          color: COLORS.ink,
+        })
+      }
+      const metaParts = [ctx.fichaDate, ctx.fichaTherapist].filter((part) => part && part.trim())
+      if (metaParts.length > 0) {
+        cursor -= 8 + 14
+        ctx.page.drawText(toWinAnsiSafe(metaParts.join(' · ')), {
+          x: MARGIN_X,
+          y: cursor,
+          size: 14,
+          font: ctx.font,
+          color: COLORS.muted,
+        })
+      }
+    }
+
+    drawFooter(ctx)
+    ctx.y = cursor - 32
+    return
+  }
+
+  // Logo maior pede faixa mais alta; nas páginas seguintes a logo fica menor (até 40 pt).
+  const logoH = ctx.logoSize
+    ? opts.isFirstPage
+      ? ctx.logoSize
+      : Math.min(ctx.logoSize, 40)
+    : opts.isFirstPage
+      ? 36
+      : 26
+  const bandHeight = opts.isFirstPage ? Math.max(92, logoH + 40) : Math.max(56, logoH + 24)
+
+  // Soft top band (geral / sessao only)
+  ctx.page.drawRectangle({
+    x: 0,
+    y: PAGE_HEIGHT - bandHeight,
+    width: PAGE_WIDTH,
+    height: bandHeight,
+    color: COLORS.accentSoft,
+  })
+
+  // Accent bar under band
+  ctx.page.drawRectangle({
+    x: 0,
+    y: PAGE_HEIGHT - bandHeight - 3,
+    width: PAGE_WIDTH,
+    height: 3,
+    color: COLORS.accent,
+  })
+
+  const logoY = PAGE_HEIGHT - bandHeight + (bandHeight - logoH) / 2 + (opts.isFirstPage ? 4 : 0)
+  // Logo à direita: o título vai para a esquerda. No centro, a logo não pode invadir o título.
+  const tituloAEsquerda = ctx.logoAlign === 'right'
+  const tituloLargura = opts.isFirstPage
+    ? Math.max(
+        ctx.bold.widthOfTextAtSize(toWinAnsiSafe(ctx.docTitle), SIZE.title),
+        ctx.font.widthOfTextAtSize(toWinAnsiSafe(ctx.generatedAt), SIZE.meta),
+      )
+    : ctx.bold.widthOfTextAtSize(toWinAnsiSafe(`${ctx.docTitle} (cont.)`), 11)
+  const logoMaxW =
+    ctx.logoAlign === 'center'
+      ? Math.max(60, (PAGE_WIDTH / 2 - MARGIN_X - tituloLargura - 16) * 2)
+      : Math.max(60, CONTENT_WIDTH - tituloLargura - 24)
+  drawBrandMark(ctx, logoY, logoH, logoMaxW, ctx.logoAlign)
+  const xTexto = (largura: number) => (tituloAEsquerda ? MARGIN_X : PAGE_WIDTH - MARGIN_X - largura)
+
+  if (opts.isFirstPage) {
+    const title = toWinAnsiSafe(ctx.docTitle)
+    const titleW = ctx.bold.widthOfTextAtSize(title, SIZE.title)
+    ctx.page.drawText(title, {
+      x: xTexto(titleW),
+      y: PAGE_HEIGHT - 42,
+      size: SIZE.title,
+      font: ctx.bold,
+      color: COLORS.forest,
+    })
+    const gen = toWinAnsiSafe(ctx.generatedAt)
+    const genW = ctx.font.widthOfTextAtSize(gen, SIZE.meta)
+    ctx.page.drawText(gen, {
+      x: xTexto(genW),
+      y: PAGE_HEIGHT - 58,
+      size: SIZE.meta,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+  } else {
+    const cont = toWinAnsiSafe(`${ctx.docTitle} (cont.)`)
+    const contW = ctx.bold.widthOfTextAtSize(cont, 11)
+    ctx.page.drawText(cont, {
+      x: xTexto(contW),
+      y: PAGE_HEIGHT - bandHeight / 2 - 4,
+      size: 11,
+      font: ctx.bold,
+      color: COLORS.forest,
+    })
+  }
+
+  drawFooter(ctx)
+  ctx.y = PAGE_HEIGHT - bandHeight - 28
+}
+
+function newPage(ctx: DrawContext) {
+  drawFooter(ctx)
+  ctx.page = ctx.doc.addPage([PAGE_WIDTH, PAGE_HEIGHT])
+  ctx.pageIndex += 1
+  drawHeaderBand(ctx, { isFirstPage: false })
+}
+
+function ensureSpace(ctx: DrawContext, needed: number) {
+  if (ctx.y - needed >= MARGIN_BOTTOM) return
+  newPage(ctx)
+}
+
+function drawPatientCard(ctx: DrawContext) {
+  const cardH = 44
+  ensureSpace(ctx, cardH + 12)
+
+  ctx.page.drawRectangle({
+    x: MARGIN_X,
+    y: ctx.y - cardH + 8,
+    width: CONTENT_WIDTH,
+    height: cardH,
+    color: COLORS.white,
+    borderColor: COLORS.line,
+    borderWidth: 1,
+  })
+
+  // Left accent
+  ctx.page.drawRectangle({
+    x: MARGIN_X,
+    y: ctx.y - cardH + 8,
+    width: 4,
+    height: cardH,
+    color: COLORS.accent,
+  })
+
+  ctx.page.drawText(toWinAnsiSafe('PACIENTE'), {
+    x: MARGIN_X + 16,
+    y: ctx.y - 6,
+    size: SIZE.label,
+    font: ctx.bold,
+    color: COLORS.accent,
+  })
+
+  const nameLines = wrapLines(ctx.bold, ctx.patientLine, 12, CONTENT_WIDTH - 28)
+  const nameLine = nameLines[0] ?? '—'
+  ctx.page.drawText(nameLine, {
+    x: MARGIN_X + 16,
+    y: ctx.y - 24,
+    size: 12,
+    font: ctx.bold,
+    color: COLORS.ink,
+  })
+
+  ctx.y -= cardH + 18
+}
+
+function drawSectionTitle(ctx: DrawContext, title: string) {
+  ensureSpace(ctx, LINE.section + 10)
+  ctx.page.drawText(toWinAnsiSafe(title.toUpperCase()), {
+    x: MARGIN_X,
+    y: ctx.y,
+    size: SIZE.section,
+    font: ctx.bold,
+    color: COLORS.accent,
+  })
+  ctx.y -= 4
+  ctx.page.drawLine({
+    start: { x: MARGIN_X, y: ctx.y },
+    end: { x: MARGIN_X + 36, y: ctx.y },
+    thickness: 2,
+    color: COLORS.accent,
+  })
+  ctx.y -= 14
+}
+
+function drawParagraph(
+  ctx: DrawContext,
+  text: string,
+  opts?: { size?: number; color?: RGB; bold?: boolean },
+) {
+  const size = opts?.size ?? SIZE.body
+  const color = opts?.color ?? COLORS.ink
+  const font = opts?.bold ? ctx.bold : ctx.font
+  const lineH = size + 4
+  const lines = wrapLines(font, text, size, ctx.contentW)
+
+  for (const line of lines) {
+    ensureSpace(ctx, lineH)
+    if (line) {
+      ctx.page.drawText(line, {
+        x: ctx.contentX,
+        y: ctx.y,
+        size,
+        font,
+        color,
+      })
+    }
+    ctx.y -= lineH
+  }
+  ctx.y -= 4
+}
+
+function drawField(ctx: DrawContext, label: string, value: string) {
+  drawLabeledValue(ctx, label, value || '—')
+}
+
+/** Compact ficha field: "Label:" + value + underline (ref style). */
+function drawLabeledValue(ctx: DrawContext, label: string, value: string) {
+  const size = SIZE.body
+  const lineH = LINE.body
+  const labelText = toWinAnsiSafe(`${label}:`)
+  const labelW = ctx.bold.widthOfTextAtSize(labelText, SIZE.label)
+  const gap = 6
+  const valueMax = Math.max(40, ctx.contentW - labelW - gap)
+  const valueLines = wrapLines(ctx.font, value, size, valueMax)
+
+  ensureSpace(ctx, Math.max(lineH, valueLines.length * lineH) + 4)
+
+  ctx.page.drawText(labelText, {
+    x: ctx.contentX,
+    y: ctx.y,
+    size: SIZE.label,
+    font: ctx.bold,
+    color: COLORS.navy,
+  })
+
+  let vy = ctx.y
+  for (let i = 0; i < valueLines.length; i++) {
+    const line = valueLines[i] ?? ''
+    if (i > 0) {
+      vy -= lineH
+      ensureSpace(ctx, lineH)
+    }
+    ctx.page.drawText(line, {
+      x: ctx.contentX + labelW + gap,
+      y: vy,
+      size,
+      font: ctx.font,
+      color: COLORS.ink,
+    })
+  }
+
+  const underlineY = vy - 3
+  ctx.page.drawLine({
+    start: { x: ctx.contentX + labelW + gap, y: underlineY },
+    end: { x: ctx.contentX + ctx.contentW, y: underlineY },
+    thickness: 0.5,
+    color: COLORS.border,
+  })
+
+  ctx.y = underlineY - 8
+}
+
+/** Filled fields only, stacked label then value. Used by the clear ficha draw. */
+function drawTwoColumnFields(
+  ctx: DrawContext,
+  fields: Array<[string, string | undefined]>,
+): void {
+  const filled = fields.filter(([, v]) => textFilled(v)) as Array<[string, string]>
+  if (filled.length === 0) return
+  for (const [label, value] of filled) {
+    drawOptionalField(ctx, label, value)
+  }
+}
+
+function drawCheckboxRow(ctx: DrawContext, items: string[]) {
+  if (items.length === 0) return
+
+  const size = SIZE.meta
+  const gapX = 10
+  const gapY = 6
+  const box = 8
+  let x = ctx.contentX
+  let rowY = ctx.y
+
+  ensureSpace(ctx, box + 10)
+
+  for (const raw of items) {
+    const label = toWinAnsiSafe(raw)
+    const textW = ctx.font.widthOfTextAtSize(label, size)
+    const cellW = box + 4 + textW
+
+    if (x + cellW > ctx.contentX + ctx.contentW) {
+      rowY -= box + gapY
+      x = ctx.contentX
+      ctx.y = rowY
+      ensureSpace(ctx, box + 10)
+      rowY = ctx.y
+    }
+
+    ctx.page.drawRectangle({
+      x,
+      y: rowY - 1,
+      width: box,
+      height: box,
+      borderColor: COLORS.navy,
+      borderWidth: 0.9,
+      color: COLORS.white,
+    })
+    // Check mark as filled inset
+    ctx.page.drawRectangle({
+      x: x + 1.5,
+      y: rowY + 0.5,
+      width: box - 3,
+      height: box - 3,
+      color: COLORS.navy,
+    })
+    ctx.page.drawText(label, {
+      x: x + box + 4,
+      y: rowY,
+      size,
+      font: ctx.font,
+      color: COLORS.ink,
+    })
+    x += cellW + gapX
+  }
+
+  ctx.y = rowY - box - 8
+}
+
+function drawChipRow(ctx: DrawContext, items: string[]) {
+  drawCheckboxRow(ctx, items)
+}
+
+function drawEvaBadge(ctx: DrawContext, eva: number) {
+  drawSectionTitle(ctx, 'Dor (EVA)')
+  ensureSpace(ctx, 36)
+
+  const value = Number.isFinite(eva) ? Math.max(0, Math.min(10, Math.round(eva))) : 0
+  const boxW = 56
+  const boxH = 32
+
+  ctx.page.drawRectangle({
+    x: MARGIN_X,
+    y: ctx.y - boxH + 8,
+    width: boxW,
+    height: boxH,
+    color: COLORS.accentSoft,
+    borderColor: COLORS.accent,
+    borderWidth: 1.2,
+  })
+
+  const valueLabel = String(value)
+  const vw = ctx.bold.widthOfTextAtSize(valueLabel, 16)
+  ctx.page.drawText(valueLabel, {
+    x: MARGIN_X + (boxW - vw) / 2,
+    y: ctx.y - 14,
+    size: 16,
+    font: ctx.bold,
+    color: COLORS.accent,
+  })
+
+  ctx.page.drawText(toWinAnsiSafe('Escala 0-10'), {
+    x: MARGIN_X + boxW + 12,
+    y: ctx.y - 12,
+    size: SIZE.meta,
+    font: ctx.font,
+    color: COLORS.muted,
+  })
+
+  ctx.y -= boxH + 14
+}
+
+function drawBulletList(ctx: DrawContext, items: string[]) {
+  if (items.length === 0) {
+    drawParagraph(ctx, '—', { color: COLORS.muted })
+    return
+  }
+
+  for (const item of items) {
+    const bullet = '-  '
+    const bulletW = ctx.font.widthOfTextAtSize(bullet, SIZE.body)
+    const lines = wrapLines(ctx.font, item, SIZE.body, ctx.contentW - bulletW)
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      ensureSpace(ctx, LINE.body)
+      if (i === 0) {
+        ctx.page.drawText(bullet, {
+          x: ctx.contentX,
+          y: ctx.y,
+          size: SIZE.body,
+          font: ctx.font,
+          color: COLORS.accent,
+        })
+      }
+      if (line) {
+        ctx.page.drawText(line, {
+          x: ctx.contentX + bulletW,
+          y: ctx.y,
+          size: SIZE.body,
+          font: ctx.font,
+          color: COLORS.ink,
+        })
+      }
+      ctx.y -= LINE.body
+    }
+    ctx.y -= 2
+  }
+  ctx.y -= 6
+}
+
+function drawGeral(ctx: DrawContext, input: PatientAiGeralPdfInput) {
+  drawPatientCard(ctx)
+
+  drawField(ctx, 'Queixa', input.complaint)
+  drawField(ctx, 'Diagnóstico', input.diagnosis)
+  drawField(ctx, 'Programa', input.program || '—')
+  drawEvaBadge(ctx, input.eva)
+
+  drawSectionTitle(ctx, 'Metas')
+  const goalLines =
+    input.goals.length === 0
+      ? []
+      : input.goals.map((g) => `${g.title}  ·  ${g.isDone ? 'concluído' : 'em andamento'}`)
+  if (goalLines.length === 0) {
+    drawParagraph(ctx, 'Nenhuma meta registrada.', { color: COLORS.muted })
+  } else {
+    drawBulletList(ctx, goalLines)
+  }
+
+  drawSectionTitle(ctx, 'Áreas de foco')
+  const focusLabels = input.focusAreas.filter((f) => f.isActive).map((f) => f.label)
+  if (focusLabels.length === 0) {
+    drawParagraph(ctx, 'Nenhuma área de foco ativa.', { color: COLORS.muted })
+  } else {
+    drawChipRow(ctx, focusLabels)
+  }
+
+  drawField(ctx, 'Resumo IA', input.aiSummary || '—')
+  if (input.evolutionHighlights?.trim()) {
+    drawField(ctx, 'Destaques de evolução', input.evolutionHighlights)
+  }
+}
+
+function drawSessao(ctx: DrawContext, input: PatientAiSessaoPdfInput) {
+  drawPatientCard(ctx)
+
+  const when =
+    [input.sessionDateLabel, input.sessionTimeLabel].filter(Boolean).join(' · ') ||
+    input.sessionLabel
+  drawField(ctx, 'Sessão', when)
+
+  const evo = input.evolution
+  if (!evo) {
+    drawField(ctx, 'Evolução', 'Sem evolução registrada para esta sessão.')
+    return
+  }
+
+  drawField(ctx, 'Estado do paciente', evo.patientState)
+  drawField(ctx, 'Mudanças desde a última', evo.changesSinceLast ?? '—')
+  drawField(ctx, 'Condutas', evo.conducts)
+  drawField(ctx, 'Resposta ao tratamento', evo.treatmentResponse ?? '—')
+  if (textFilled(evo.sideEffects)) drawField(ctx, 'Efeitos colaterais', evo.sideEffects)
+  drawField(ctx, 'Intercorrências', evo.incidents ?? '—')
+  drawField(ctx, 'Plano seguinte', evo.nextPlan ?? '—')
+}
+
+function textFilled(value: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function checkedLabels(
+  flags: Record<string, unknown> | undefined,
+  labels: Record<string, string>,
+): string[] {
+  if (!flags) return []
+  const parts: string[] = []
+  for (const [key, label] of Object.entries(labels)) {
+    if (flags[key] === true) parts.push(label)
+  }
+  for (const detailKey of [
+    'outroDetalhe',
+    'outraDetalhe',
+    'outrosDetalhe',
+    'outroAchadoDetalhe',
+  ] as const) {
+    const detail = flags[detailKey]
+    if (typeof detail === 'string' && detail.trim()) parts.push(detail.trim())
+  }
+  return parts
+}
+
+/** Section title on the clear ficha: 20pt, 24pt before, 8pt before the first field. */
+function drawClearSectionTitle(ctx: DrawContext, title: string): void {
+  const size = 20
+  const titleH = Math.round(size * 1.2)
+  ensureSpace(ctx, 24 + titleH + 8)
+  ctx.y -= 24
+  ctx.page.drawText(toWinAnsiSafe(title), {
+    x: ctx.contentX,
+    y: ctx.y,
+    size,
+    font: ctx.bold,
+    color: COLORS.ink,
+  })
+  ctx.y -= titleH + 8
+}
+
+const SIGNATURE_BOX_W = 180
+const SIGNATURE_BOX_H = 48
+
+/** Label 14pt bold + drawn signature stroke (black, ~180x48pt box). Path must already be validated. */
+function drawSignatureStroke(ctx: DrawContext, label: string, path: string): void {
+  const labelSize = 14
+  const labelH = Math.round(labelSize * 1.2)
+  const scale = signaturePdfScale(SIGNATURE_BOX_W, SIGNATURE_BOX_H)
+
+  ensureSpace(ctx, labelH + 8 + SIGNATURE_BOX_H + 12)
+  ctx.page.drawText(toWinAnsiSafe(label), {
+    x: ctx.contentX,
+    y: ctx.y,
+    size: labelSize,
+    font: ctx.bold,
+    color: COLORS.ink,
+  })
+  ctx.y -= labelH + 8
+
+  ctx.page.drawSvgPath(path, {
+    x: ctx.contentX,
+    y: ctx.y,
+    scale,
+    borderColor: rgb(0, 0, 0),
+    borderWidth: 1.2 / scale,
+    borderLineCap: LineCapStyle.Round,
+  })
+  ctx.y -= SIGNATURE_BOX_H + 12
+}
+
+/** Label 14pt bold, value 14pt, 8pt between them, 16pt before the next field. Skips empty. */
+function drawOptionalField(
+  ctx: DrawContext,
+  label: string,
+  value: string | number | null | undefined,
+): boolean {
+  if (value === null || value === undefined) return false
+  const text = String(value).trim()
+  if (!text) return false
+
+  const labelSize = 14
+  const valueSize = 14
+  const labelH = Math.round(labelSize * 1.2)
+  const valueH = Math.round(valueSize * 1.5)
+  const lines = wrapLines(ctx.font, text, valueSize, ctx.contentW)
+
+  ensureSpace(ctx, labelH + 8 + Math.max(valueH, lines.length * valueH))
+  ctx.page.drawText(toWinAnsiSafe(label), {
+    x: ctx.contentX,
+    y: ctx.y,
+    size: labelSize,
+    font: ctx.bold,
+    color: COLORS.ink,
+  })
+  ctx.y -= labelH + 8
+
+  for (const line of lines) {
+    ensureSpace(ctx, valueH)
+    if (line) {
+      ctx.page.drawText(line, {
+        x: ctx.contentX,
+        y: ctx.y,
+        size: valueSize,
+        font: ctx.font,
+        color: COLORS.ink,
+      })
+    }
+    ctx.y -= valueH
+  }
+  ctx.y -= 16
+  return true
+}
+
+/** Value paragraph at 14pt. Used when the section title is already the label. */
+function drawClearValue(ctx: DrawContext, value: string | null | undefined): boolean {
+  if (!textFilled(value)) return false
+  const valueSize = 14
+  const valueH = Math.round(valueSize * 1.5)
+  const lines = wrapLines(ctx.font, value.trim(), valueSize, ctx.contentW)
+  for (const line of lines) {
+    ensureSpace(ctx, valueH)
+    if (line) {
+      ctx.page.drawText(line, {
+        x: ctx.contentX,
+        y: ctx.y,
+        size: valueSize,
+        font: ctx.font,
+        color: COLORS.ink,
+      })
+    }
+    ctx.y -= valueH
+  }
+  ctx.y -= 16
+  return true
+}
+
+function drawOptionalBullets(ctx: DrawContext, title: string, items: string[]): boolean {
+  if (items.length === 0) return false
+  return drawOptionalField(ctx, title, items.join(', '))
+}
+
+function enumLabel(value: string | undefined, map: Record<string, string>): string | undefined {
+  if (!value) return undefined
+  return map[value] ?? value
+}
+
+/** Omitted set = all filled blocks (back-compat). */
+function isFieldSelected(selected: ReadonlySet<PdfFieldId> | undefined, id: PdfFieldId): boolean {
+  return selected === undefined || selected.has(id)
+}
+
+type DataTableColumn = { label: string; widthFrac: number }
+
+/** Shaded-header clinical table with hairline grid (REQ-26.5). Skips empty rows. */
+function drawDataTable(
+  ctx: DrawContext,
+  columns: DataTableColumn[],
+  rows: Array<Array<string | null | undefined>>,
+): void {
+  const data = rows
+    .map((r) => r.map((c) => (typeof c === 'string' ? c.trim() : '')))
+    .filter((r) => r.some((c) => c.length > 0))
+  if (data.length === 0 || columns.length === 0) return
+
+  const padX = 3
+  const padY = 3
+  const fontSize = SIZE.meta
+  const lineH = 10
+  const headerH = 15
+  const widths = columns.map((c) => c.widthFrac * ctx.contentW)
+
+  const measureRowH = (cells: string[]) => {
+    let maxLines = 1
+    for (let i = 0; i < columns.length; i++) {
+      const raw = cells[i]?.trim() ?? ''
+      if (!raw) continue
+      const w = Math.max(8, (widths[i] ?? 40) - padX * 2)
+      const lines = wrapLines(ctx.font, raw, fontSize, w)
+      maxLines = Math.max(maxLines, lines.length)
+    }
+    return padY * 2 + maxLines * lineH
+  }
+
+  ensureSpace(ctx, headerH + 4)
+  const headerTop = ctx.y
+  const headerBottom = headerTop - headerH
+  ctx.page.drawRectangle({
+    x: ctx.contentX,
+    y: headerBottom,
+    width: ctx.contentW,
+    height: headerH,
+    color: COLORS.accentSoft,
+  })
+
+  let hx = ctx.contentX
+  for (let i = 0; i < columns.length; i++) {
+    const col = columns[i]!
+    const cw = widths[i]!
+    ctx.page.drawText(toWinAnsiSafe(col.label), {
+      x: hx + padX,
+      y: headerBottom + 4,
+      size: fontSize,
+      font: ctx.bold,
+      color: COLORS.navy,
+    })
+    if (i > 0) {
+      ctx.page.drawLine({
+        start: { x: hx, y: headerBottom },
+        end: { x: hx, y: headerTop },
+        thickness: 0.4,
+        color: COLORS.border,
+      })
+    }
+    hx += cw
+  }
+  ctx.page.drawLine({
+    start: { x: ctx.contentX, y: headerBottom },
+    end: { x: ctx.contentX + ctx.contentW, y: headerBottom },
+    thickness: 0.6,
+    color: COLORS.border,
+  })
+  // Outer header border
+  ctx.page.drawRectangle({
+    x: ctx.contentX,
+    y: headerBottom,
+    width: ctx.contentW,
+    height: headerH,
+    borderColor: COLORS.border,
+    borderWidth: 0.6,
+  })
+  ctx.y = headerBottom
+
+  for (const cells of data) {
+    const rowH = measureRowH(cells)
+    ensureSpace(ctx, rowH + 2)
+    const rowTop = ctx.y
+    const rowBottom = rowTop - rowH
+
+    ctx.page.drawRectangle({
+      x: ctx.contentX,
+      y: rowBottom,
+      width: ctx.contentW,
+      height: rowH,
+      color: COLORS.white,
+      borderColor: COLORS.line,
+      borderWidth: 0.5,
+    })
+
+    let cx = ctx.contentX
+    for (let i = 0; i < columns.length; i++) {
+      const cw = widths[i]!
+      const cellText = cells[i]?.trim() ?? ''
+      if (cellText) {
+        const lines = wrapLines(ctx.font, cellText, fontSize, Math.max(8, cw - padX * 2))
+        let ty = rowTop - padY - fontSize
+        for (const line of lines) {
+          if (!line) continue
+          ctx.page.drawText(line, {
+            x: cx + padX,
+            y: ty,
+            size: fontSize,
+            font: ctx.font,
+            color: COLORS.ink,
+          })
+          ty -= lineH
+        }
+      }
+      if (i > 0) {
+        ctx.page.drawLine({
+          start: { x: cx, y: rowBottom },
+          end: { x: cx, y: rowTop },
+          thickness: 0.4,
+          color: COLORS.line,
+        })
+      }
+      cx += cw
+    }
+    ctx.y = rowBottom
+  }
+  ctx.y -= 8
+}
+
+/**
+ * EVA 0–10 circle scale (REQ-26.5 / D-04.7). Only when at least one value filled.
+ * Does not reuse drawEvaBadge (geral PDF).
+ */
+function drawEvaScale(
+  ctx: DrawContext,
+  values: { agora?: number; melhor?: number; pior?: number },
+): void {
+  const filled: number[] = []
+  for (const v of [values.agora, values.melhor, values.pior]) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      filled.push(Math.max(0, Math.min(10, Math.round(v))))
+    }
+  }
+  if (filled.length === 0) return
+
+  const active = new Set(filled)
+  const scaleH = 28
+  ensureSpace(ctx, scaleH + 8)
+
+  const x0 = ctx.contentX + 8
+  const yLine = ctx.y - 6
+  const step = (ctx.contentW - 16) / 10
+
+  ctx.page.drawLine({
+    start: { x: x0, y: yLine },
+    end: { x: x0 + step * 10, y: yLine },
+    thickness: 0.7,
+    color: COLORS.border,
+  })
+
+  for (let i = 0; i <= 10; i++) {
+    const cx = x0 + step * i
+    const isActive = active.has(i)
+    ctx.page.drawCircle({
+      x: cx,
+      y: yLine,
+      size: 3.5,
+      borderColor: COLORS.navy,
+      borderWidth: 0.8,
+      color: isActive ? COLORS.navy : COLORS.white,
+    })
+    const label = String(i)
+    const lw = ctx.font.widthOfTextAtSize(label, 7)
+    ctx.page.drawText(label, {
+      x: cx - lw / 2,
+      y: yLine - 12,
+      size: 7,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+  }
+
+  ctx.y -= scaleH
+}
+
+type BodyMapMarkInput = { regionKey: string; symbol?: string }
+
+/**
+ * Anterior/posterior silhouettes via drawSvgPath on FOCUS_REGIONS (REQ-26.5 / D-04.8).
+ * Legend uses BODY_MAP_GLYPH ASCII only (^ / * — never ★/↑).
+ */
+function drawBodyMap(ctx: DrawContext, marks: BodyMapMarkInput[]): void {
+  if (marks.length === 0) return
+
+  const markByKey = new Map<string, BodyMapMarkInput>()
+  for (const m of marks) {
+    if (FOCUS_REGIONS.some((r) => r.key === m.regionKey)) {
+      markByKey.set(m.regionKey, m)
+    }
+  }
+  if (markByKey.size === 0) return
+
+  const mapHeight = 150
+  const scale = mapHeight / 240
+  const mapWidth = 140 * scale
+  const gap = 18
+  const pairW = mapWidth * 2 + gap
+  const legendH = 36
+  const totalH = mapHeight + legendH + 16
+
+  ensureSpace(ctx, totalH)
+
+  const originY = ctx.y // PDF top of viewBox after drawSvgPath Y-flip
+  let originX = ctx.contentX
+  if (pairW < ctx.contentW) {
+    originX = ctx.contentX + (ctx.contentW - pairW) / 2
+  }
+
+  const drawView = (view: 'front' | 'back', ox: number) => {
+    const regions = listFocusRegionsByView(view)
+    for (const region of regions) {
+      const marked = markByKey.has(region.key)
+      ctx.page.drawSvgPath(region.path, {
+        x: ox,
+        y: originY,
+        scale,
+        color: marked ? COLORS.accentSoft : COLORS.white,
+        borderColor: COLORS.navy,
+        borderWidth: 0.55,
+      })
+    }
+    for (const region of regions) {
+      const mark = markByKey.get(region.key)
+      if (!mark) continue
+      const centroid = BODY_MAP_CENTROIDS[region.key as FocusRegionKey]
+      if (!centroid) continue
+      const glyph = mark.symbol ? BODY_MAP_GLYPH[mark.symbol] ?? '' : 'X'
+      if (!glyph) continue
+      const safe = toWinAnsiSafe(glyph)
+      const gw = ctx.bold.widthOfTextAtSize(safe, 8)
+      const px = ox + centroid.x * scale - gw / 2
+      const py = originY - centroid.y * scale - 3
+      ctx.page.drawText(safe, {
+        x: px,
+        y: py,
+        size: 8,
+        font: ctx.bold,
+        color: COLORS.danger,
+      })
+    }
+    const caption = view === 'front' ? 'Anterior' : 'Posterior'
+    const cw = ctx.font.widthOfTextAtSize(caption, SIZE.meta)
+    ctx.page.drawText(caption, {
+      x: ox + (mapWidth - cw) / 2,
+      y: originY - mapHeight - 10,
+      size: SIZE.meta,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+  }
+
+  drawView('front', originX)
+  drawView('back', originX + mapWidth + gap)
+
+  ctx.y = originY - mapHeight - 18
+
+  // ASCII legend only (^ / * — never ★/↑)
+  const legendItems = [
+    `X = dor / sintoma`,
+    `//// = area`,
+    `O = irradiacao`,
+    `^ = irradiacao dir.`,
+    `* = ponto principal`,
+  ]
+  ensureSpace(ctx, 28)
+  ctx.page.drawText(toWinAnsiSafe('Legenda:'), {
+    x: ctx.contentX,
+    y: ctx.y,
+    size: SIZE.label,
+    font: ctx.bold,
+    color: COLORS.navy,
+  })
+  ctx.y -= 12
+  let lx = ctx.contentX
+  const legendSize = 7
+  for (const item of legendItems) {
+    const safe = toWinAnsiSafe(item)
+    const w = ctx.font.widthOfTextAtSize(safe, legendSize)
+    if (lx + w > ctx.contentX + ctx.contentW) {
+      ctx.y -= 10
+      lx = ctx.contentX
+      ensureSpace(ctx, 12)
+    }
+    ctx.page.drawText(safe, {
+      x: lx,
+      y: ctx.y,
+      size: legendSize,
+      font: ctx.font,
+      color: COLORS.muted,
+    })
+    lx += w + 12
+  }
+  ctx.y -= 14
+}
+
+/**
+ * Page 04 of the clear avaliação PDF. Delimiter comments keep the REQ-36 source
+ * slices around mobilidade and the força table after the block frames left this draw.
+ */
+function drawPlanoClinico(
+  ctx: DrawContext,
+  ficha: EvaluationFicha,
+  selected: ReadonlySet<PdfFieldId> | undefined,
+): boolean {
+  let anyContent = false
+
+  // —— 04 Avaliação e plano ——
+  const plano = ficha.avaliacaoPlano
+  const inspecaoItems = checkedLabels(plano?.inspecao as Record<string, unknown> | undefined, {
+    marcha: 'Marcha',
+    postura: 'Postura',
+    edema: 'Edema',
+    equimose: 'Equimose',
+    atrofia: 'Atrofia',
+    assimetria: 'Assimetria',
+    compensacoes: 'Compensações',
+    outro: 'Outro',
+  })
+  const hasInspecao = inspecaoItems.length > 0 || textFilled(plano?.inspecao?.achados)
+
+  const mobilidade = plano?.mobilidade
+  const hasMob = (mobilidade?.regioes?.length ?? 0) > 0 || textFilled(mobilidade?.registroAnterior)
+
+  const forcaRows = (plano?.forca?.linhas ?? []).filter(
+    (row) =>
+      textFilled(row.grupo) ||
+      textFilled(row.direito) ||
+      textFilled(row.esquerdo) ||
+      textFilled(row.dor) ||
+      textFilled(row.observacao),
+  )
+
+  const neuroItems = checkedLabels(plano?.neurologico as Record<string, unknown> | undefined, {
+    sensibilidade: 'Sensibilidade',
+    miotomos: 'Miotomos',
+    reflexos: 'Reflexos',
+    neurodinamica: 'Neurodinâmica',
+    coordenacao: 'Coordenação',
+    outro: 'Outro',
+  })
+  const hasNeuro = neuroItems.length > 0 || textFilled(plano?.neurologico?.achados)
+
+  const palpacao = plano?.palpacaoTestes
+  const hasPalp =
+    (palpacao?.achados?.length ?? 0) > 0 ||
+    (palpacao?.testes?.length ?? 0) > 0 ||
+    textFilled(palpacao?.palpacaoRegistroAnterior) ||
+    textFilled(palpacao?.testesRegistroAnterior) ||
+    textFilled(palpacao?.resultados) ||
+    textFilled(palpacao?.testeFuncional) ||
+    textFilled(palpacao?.resultadoInicial) ||
+    (palpacao?.funcionais?.length ?? 0) > 0
+
+  const hasSintese =
+    textFilled(plano?.sintese?.problema1) ||
+    textFilled(plano?.sintese?.problema2) ||
+    textFilled(plano?.sintese?.problema3) ||
+    textFilled(plano?.sintese?.diagnosticoFisio) ||
+    textFilled(plano?.sintese?.prognostico)
+
+  const hasObj =
+    textFilled(plano?.objetivos?.curto1) ||
+    textFilled(plano?.objetivos?.curto2) ||
+    textFilled(plano?.objetivos?.medioLongo1) ||
+    textFilled(plano?.objetivos?.medioLongo2)
+
+  const planItems = checkedLabels(plano?.planejamento as Record<string, unknown> | undefined, {
+    educacao: 'Educação',
+    exercicioTerapeutico: 'Exercício terapêutico',
+    treinoFuncional: 'Treino funcional',
+    terapiaManual: 'Terapia manual',
+    exposicaoCarga: 'Exposição à carga',
+    autocuidado: 'Autocuidado',
+    outro: 'Outro',
+  })
+  const hasPlan =
+    planItems.length > 0 ||
+    textFilled(plano?.planejamento?.frequencia) ||
+    textFilled(plano?.planejamento?.qtdAtendimentos) ||
+    textFilled(plano?.planejamento?.criteriosProgressao) ||
+    textFilled(plano?.planejamento?.criteriosReavaliacao) ||
+    Boolean(plano?.planejamento?.encaminhamento) ||
+    textFilled(plano?.planejamento?.encaminhamentoDetalhe)
+
+  const hasProf =
+    textFilled(plano?.profissional?.fisioterapeuta) ||
+    textFilled(plano?.profissional?.crefito) ||
+    textFilled(plano?.profissional?.data) ||
+    textFilled(plano?.profissional?.assinatura) ||
+    textFilled(plano?.profissional?.assinaturaTraco)
+
+  const show04A = hasInspecao && isFieldSelected(selected, '04.A')
+  const show04B = hasMob && isFieldSelected(selected, '04.B')
+  const show04C = forcaRows.length > 0 && isFieldSelected(selected, '04.C')
+  const show04D = hasNeuro && isFieldSelected(selected, '04.D')
+  const show04E = hasPalp && isFieldSelected(selected, '04.E')
+  const show04F = hasSintese && isFieldSelected(selected, '04.F')
+  const show04G = hasObj && isFieldSelected(selected, '04.G')
+  const show04H = hasPlan && isFieldSelected(selected, '04.H')
+  const show04ID = hasProf && isFieldSelected(selected, '04.ID')
+
+  if (show04A) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Inspeção / observação')
+    drawOptionalBullets(ctx, 'Achados observados', inspecaoItems)
+    drawOptionalField(ctx, 'Achados', plano?.inspecao?.achados)
+  }
+  if (show04B) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Mobilidade')
+    for (const regiao of mobilidade?.regioes ?? []) {
+      const nome = formatCabecalhoRegiao({ regiao: regiao.regiao }, { incluirNome: true }).replaceAll(
+        '→',
+        '->',
+      )
+      const linhas = [
+        formatCabecalhoRegiao(regiao, { incluirNome: true }).replaceAll('→', '->'),
+        ...(regiao.movimentos ?? []).map((movimento) =>
+          formatLinhaMovimento(movimento, regiao.regiao).replaceAll('→', '->'),
+        ),
+      ].filter((linha) => linha.trim().length > 0)
+      if (!nome.trim() || linhas.length === 0) continue
+      drawOptionalField(ctx, nome, linhas.join('\n'))
+    }
+    drawOptionalField(ctx, 'Registro anterior', mobilidade?.registroAnterior?.replaceAll('→', '->'))
+  }
+  // drawFichaBlockFrame(ctx, 'C'
+  if (show04C) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Força')
+    drawDataTable(
+      ctx,
+      [
+        { label: 'Regiao', widthFrac: 0.16 },
+        { label: 'Movimento/Grupo', widthFrac: 0.22 },
+        { label: 'Direito', widthFrac: 0.12 },
+        { label: 'Esquerdo', widthFrac: 0.12 },
+        { label: 'Dor', widthFrac: 0.16 },
+        { label: 'Observacao', widthFrac: 0.22 },
+      ],
+      agruparForca(forcaRows).flatMap((grupo) =>
+        grupo.linhas.map(({ linha: row }) => [grupo.regiao, row.grupo, row.direito, row.esquerdo, row.dor, row.observacao]),
+      ),
+    )
+  }
+  // drawFichaBlockFrame(ctx, 'D'
+  if (show04D) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Avaliação neurológica')
+    drawOptionalBullets(ctx, 'Itens', neuroItems)
+    drawOptionalField(ctx, 'Achados', plano?.neurologico?.achados)
+  }
+  if (show04E) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Palpação / testes / função')
+    for (const achado of palpacao?.achados ?? []) {
+      const frase = formatAchado(achado).replaceAll('→', '->')
+      if (!frase.trim()) continue
+      drawOptionalField(ctx, 'Achado', frase)
+    }
+    drawOptionalField(
+      ctx,
+      'Registro anterior',
+      palpacao?.palpacaoRegistroAnterior?.replaceAll('→', '->'),
+    )
+    const linhasTeste = (palpacao?.testes ?? [])
+      .map((teste) => formatTeste(teste).replaceAll('→', '->'))
+      .filter((linha) => linha.trim().length > 0)
+    if (linhasTeste.length > 0) {
+      drawOptionalField(ctx, 'Testes clínicos', linhasTeste.join('\n'))
+    }
+    drawOptionalField(
+      ctx,
+      'Registro anterior',
+      palpacao?.testesRegistroAnterior?.replaceAll('→', '->'),
+    )
+    drawOptionalField(ctx, 'Resultados', palpacao?.resultados?.replaceAll('→', '->'))
+    const linhasFuncionais = (palpacao?.funcionais ?? []).map((item) => formatTesteFuncional(item))
+    if (linhasFuncionais.length > 0) {
+      drawOptionalField(ctx, 'Testes funcionais', linhasFuncionais.join('\n'))
+    }
+    drawOptionalField(ctx, 'Teste funcional', palpacao?.testeFuncional?.replaceAll('→', '->'))
+    drawOptionalField(ctx, 'Resultado inicial', palpacao?.resultadoInicial?.replaceAll('→', '->'))
+  }
+  if (show04F) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Síntese dos principais achados')
+    drawOptionalField(ctx, 'Problema 1', plano?.sintese?.problema1)
+    drawOptionalField(ctx, 'Problema 2', plano?.sintese?.problema2)
+    drawOptionalField(ctx, 'Problema 3', plano?.sintese?.problema3)
+    drawOptionalField(ctx, 'Diagnóstico fisioterapêutico', plano?.sintese?.diagnosticoFisio)
+    drawOptionalField(ctx, 'Prognóstico', plano?.sintese?.prognostico)
+  }
+  if (show04G) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Objetivos')
+    drawOptionalField(ctx, 'Curto prazo 1', plano?.objetivos?.curto1)
+    drawOptionalField(ctx, 'Curto prazo 2', plano?.objetivos?.curto2)
+    drawOptionalField(ctx, 'Médio/longo 1', plano?.objetivos?.medioLongo1)
+    drawOptionalField(ctx, 'Médio/longo 2', plano?.objetivos?.medioLongo2)
+  }
+  if (show04H) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Planejamento')
+    drawOptionalBullets(ctx, 'Condutas', planItems)
+    drawOptionalField(ctx, 'Frequência', plano?.planejamento?.frequencia)
+    drawOptionalField(ctx, 'Qtd. atendimentos', plano?.planejamento?.qtdAtendimentos)
+    drawOptionalField(ctx, 'Critérios de progressão', plano?.planejamento?.criteriosProgressao)
+    drawOptionalField(ctx, 'Critérios de reavaliação', plano?.planejamento?.criteriosReavaliacao)
+    drawOptionalField(
+      ctx,
+      'Encaminhamento',
+      enumLabel(plano?.planejamento?.encaminhamento, { nao: 'Não', sim: 'Sim' }),
+    )
+    drawOptionalField(ctx, 'Encaminhamento — detalhe', plano?.planejamento?.encaminhamentoDetalhe)
+  }
+  if (show04ID) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Identificação profissional')
+    const traco = plano?.profissional?.assinaturaTraco
+    const temTraco = isSafeSignaturePath(traco)
+    drawTwoColumnFields(ctx, [
+      ['Fisioterapeuta', plano?.profissional?.fisioterapeuta],
+      ['CREFITO', plano?.profissional?.crefito],
+      ['Data', plano?.profissional?.data],
+      ['Assinatura do Profissional', temTraco ? undefined : plano?.profissional?.assinatura],
+    ])
+    if (temTraco) drawSignatureStroke(ctx, 'Assinatura do Profissional', traco)
+  }
+
+  return anyContent
+}
+
+/** 05 · Mapa de sintomas: figura com os traços coloridos e a legenda só das cores usadas. */
+function drawMapaSintomas(
+  ctx: DrawContext,
+  tracos: BodyDrawingStroke[],
+  caixa: BodyDrawingBox,
+  observacao?: string,
+  personalizada?: CorPersonalizada | null,
+): void {
+  if (tracos.length > 0 && ctx.bodyImage) {
+    // Figura de quatro vistas é mais larga: usa a largura toda do conteúdo.
+    const width = Math.min(ctx.contentW, caixa.width > caixa.height * 1.2 ? 520 : 400)
+    const height = (width * caixa.height) / caixa.width
+    const usadas = usedBodyDrawingColors(tracos, personalizada)
+    const legendRowH = 14
+    // Estimativa folgada para reservar espaço (a legenda quase sempre cabe em 1 linha).
+    const legendH = Math.ceil(usadas.length / 4) * legendRowH
+    ensureSpace(ctx, height + 12 + legendH + 12)
+
+    const x = ctx.contentX + (ctx.contentW - width) / 2
+    const top = ctx.y
+    ctx.page.drawImage(ctx.bodyImage, { x, y: top - height, width, height })
+    ctx.page.drawRectangle({
+      x,
+      y: top - height,
+      width,
+      height,
+      borderColor: COLORS.border,
+      borderWidth: 0.6,
+    })
+
+    const scale = width / caixa.width
+    for (const traco of tracos) {
+      const info = infoDaCor(traco.cor, personalizada)
+      if (!info) continue
+      ctx.page.drawSvgPath(traco.d, {
+        x,
+        y: top,
+        scale,
+        borderColor: rgb(info.rgb[0], info.rgb[1], info.rgb[2]),
+        borderWidth: bodyDrawingWidthInfo(traco.espessura).pdf / scale,
+        borderLineCap: LineCapStyle.Round,
+        // Multiply: a cor tinge o branco e as linhas pretas da figura ficam por cima.
+        blendMode: BlendMode.Multiply,
+      })
+    }
+    ctx.y = top - height - 14
+
+    // Legenda minimalista: bolinha + nome, centralizada numa linha (quebra se não couber).
+    const size = SIZE.meta
+    const gapItem = 14
+    const itens = usadas.map((info) => {
+      const texto = toWinAnsiSafe(info.label)
+      return { info, texto, w: 8 + 5 + ctx.font.widthOfTextAtSize(texto, size) }
+    })
+    const linhas: (typeof itens)[] = [[]]
+    let larguraLinha = 0
+    for (const item of itens) {
+      const atual = linhas[linhas.length - 1]!
+      const extra = (atual.length > 0 ? gapItem : 0) + item.w
+      if (atual.length > 0 && larguraLinha + extra > ctx.contentW) {
+        linhas.push([item])
+        larguraLinha = item.w
+      } else {
+        atual.push(item)
+        larguraLinha += extra
+      }
+    }
+    for (const linha of linhas) {
+      const total = linha.reduce((sum, item, index) => sum + item.w + (index > 0 ? gapItem : 0), 0)
+      let cx = ctx.contentX + (ctx.contentW - total) / 2
+      for (const item of linha) {
+        ctx.page.drawCircle({
+          x: cx + 4,
+          y: ctx.y + 3,
+          size: 4,
+          color: rgb(item.info.rgb[0], item.info.rgb[1], item.info.rgb[2]),
+        })
+        ctx.page.drawText(item.texto, { x: cx + 13, y: ctx.y, size, font: ctx.font, color: COLORS.muted })
+        cx += item.w + gapItem
+      }
+      ctx.y -= legendRowH
+    }
+    ctx.y -= 6
+  }
+  drawOptionalField(ctx, 'Observações do desenho', observacao)
+}
+
+/**
+ * Renders EvaluationFicha pages 01–04; omits empty/unselected blocks (D-02/D-03/D-05/D-07).
+ */
+function drawAvaliacao(ctx: DrawContext, input: PatientAiAvaliacaoPdfInput) {
+  ctx.footerKind = 'ficha'
+
+  const metaFields: Array<[string, string | undefined]> = [
+    ['Nome da avaliação', input.evaluationTitle ?? undefined],
+    ['Data da avaliação', input.performedOnLabel],
+    ['Fisioterapeuta', input.therapistName ?? undefined],
+  ]
+  drawTwoColumnFields(ctx, metaFields)
+
+  const ficha = input.ficha
+  const selected = input.selectedFieldIds
+  let anyContent = false
+
+  // —— 01 Anamnese ——
+  const id = ficha.anamnese?.identificacao
+  const queixa = ficha.anamnese?.queixa
+  const historia = ficha.anamnese?.historiaAtual
+  const tratamentos = ficha.anamnese?.tratamentos
+  const pregresso = ficha.anamnese?.historicoPregresso
+
+  const idFields: Array<[string, string | undefined]> = [
+    ['Nome completo', id?.nomeCompleto],
+    ['Data de nascimento', id?.dataNascimento],
+    ['Naturalidade', id?.naturalidade],
+    ['Gênero', id?.genero],
+    ['Estado civil', id?.estadoCivil],
+    ['Profissão', id?.profissao],
+    ['Peso', id?.peso],
+    ['Altura', id?.altura],
+    ['Endereço residencial', id?.enderecoResidencial],
+    ['Endereço profissional', id?.enderecoProfissional],
+    ['Contato', id?.contato],
+    ['Data da avaliação (ficha)', id?.dataAvaliacao],
+  ]
+  const hasId = idFields.some(([, v]) => textFilled(v))
+  const ladoItems = checkedLabels(queixa?.lado as Record<string, unknown> | undefined, {
+    direito: 'Direito',
+    esquerdo: 'Esquerdo',
+    bilateral: 'Bilateral',
+    central: 'Central',
+    naoSeAplica: 'Não se aplica',
+  })
+  const hasQueixa =
+    textFilled(queixa?.oQueTrouxe) ||
+    textFilled(queixa?.regiao) ||
+    textFilled(queixa?.haQuantoTempo) ||
+    ladoItems.length > 0
+
+  const inicioItems = checkedLabels(historia?.inicio as Record<string, unknown> | undefined, {
+    subito: 'Súbito',
+    gradual: 'Gradual',
+    aposTrauma: 'Após trauma',
+    aposCirurgia: 'Após cirurgia',
+    aposMudancaCarga: 'Após mudança de carga',
+    semMecanismoClaro: 'Sem mecanismo claro',
+  })
+  const evolucaoItems = checkedLabels(historia?.evolucao as Record<string, unknown> | undefined, {
+    melhorando: 'Melhorando',
+    piorando: 'Piorando',
+    estavel: 'Estável',
+    oscilando: 'Oscilando',
+  })
+  const hasHistoria =
+    inicioItems.length > 0 ||
+    textFilled(historia?.dataAproxInicio) ||
+    textFilled(historia?.comoComecou) ||
+    evolucaoItems.length > 0 ||
+    Boolean(historia?.jaAconteceuAntes) ||
+    textFilled(historia?.jaAconteceuDetalhe)
+
+  const tratamentoItems = checkedLabels(tratamentos as Record<string, unknown> | undefined, {
+    fisio: 'Fisioterapia',
+    medicamentos: 'Medicamentos',
+    infiltracao: 'Infiltração',
+    cirurgia: 'Cirurgia',
+    imobilizacao: 'Imobilização',
+    outro: 'Outro',
+  })
+  const exameItems = checkedLabels(
+    tratamentos?.exames as Record<string, unknown> | undefined,
+    {
+      rx: 'RX',
+      us: 'US',
+      rm: 'RM',
+      tc: 'TC',
+      enmg: 'ENMG',
+      outros: 'Outros',
+    },
+  )
+  const hasTratamentos =
+    tratamentoItems.length > 0 || exameItems.length > 0 || textFilled(tratamentos?.achados)
+
+  const pregressoItems = checkedLabels(pregresso as Record<string, unknown> | undefined, {
+    cirurgias: 'Cirurgias',
+    fraturas: 'Fraturas',
+    lesoesMsk: 'Lesões musculoesqueléticas',
+    neuro: 'Neuro',
+    cardio: 'Cardio',
+    diabetes: 'Diabetes',
+    cancer: 'Câncer',
+    inflamatorioReuma: 'Inflamatório / reuma',
+    outros: 'Outros',
+  })
+  const hasPregresso = pregressoItems.length > 0 || textFilled(pregresso?.observacoes)
+
+  const show01A = hasId && isFieldSelected(selected, '01.A')
+  const show01B = hasQueixa && isFieldSelected(selected, '01.B')
+  const show01C = hasHistoria && isFieldSelected(selected, '01.C')
+  const show01E = hasTratamentos && isFieldSelected(selected, '01.E')
+  const show01F = hasPregresso && isFieldSelected(selected, '01.F')
+
+  if (show01A) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Identificação')
+    drawTwoColumnFields(ctx, idFields)
+  }
+  if (show01B) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Queixa principal')
+    drawOptionalField(ctx, 'O que trouxe você à fisioterapia', queixa?.oQueTrouxe)
+    drawOptionalField(ctx, 'Principal região', queixa?.regiao)
+    drawOptionalBullets(ctx, 'Lado', ladoItems)
+    drawOptionalField(ctx, 'Há quanto tempo', queixa?.haQuantoTempo)
+  }
+  if (show01C) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'História atual')
+    drawOptionalBullets(ctx, 'Início', inicioItems)
+    drawOptionalField(ctx, 'Data aproximada de início', historia?.dataAproxInicio)
+    drawOptionalField(ctx, 'Descreva como começou', historia?.comoComecou)
+    drawOptionalBullets(ctx, 'Evolução desde o início', evolucaoItems)
+    drawOptionalField(
+      ctx,
+      'Já aconteceu antes',
+      enumLabel(historia?.jaAconteceuAntes, { nao: 'Não', sim: 'Sim' }),
+    )
+    drawOptionalField(ctx, 'Se sim, quando/como', historia?.jaAconteceuDetalhe)
+  }
+  const esportesResumo = resumoEsportes(ficha.funcao)
+  const atividadeFisicaResumo = formatAtividadeFisica(ficha.funcao?.rotina)
+  const praticaAtividade = enumLabel(ficha.funcao?.rotina?.praticaAtividadeFisica, {
+    nao: 'Não',
+    sim: 'Sim',
+  })
+  if (
+    (esportesResumo.length > 0 || textFilled(praticaAtividade) || textFilled(atividadeFisicaResumo)) &&
+    isFieldSelected(selected, '01.D')
+  ) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Esportes')
+    drawOptionalField(ctx, 'Pratica atividade física', praticaAtividade)
+    drawOptionalField(ctx, 'Atividade física', atividadeFisicaResumo)
+    for (const esporte of esportesResumo) {
+      const linhas = [
+        ...esporte.linhas,
+        ...esporte.problemas.map((p) => `Problema: ${p.nome} · ${p.regiao}`),
+      ]
+      if (linhas.length > 0) {
+        drawOptionalBullets(ctx, esporte.label, linhas)
+      } else {
+        drawOptionalField(ctx, 'Esporte', esporte.label)
+      }
+    }
+  }
+  if (show01E) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Tratamentos e investigações anteriores')
+    drawOptionalBullets(ctx, 'Tratamentos', tratamentoItems)
+    drawOptionalBullets(ctx, 'Exames complementares', exameItems)
+    drawOptionalField(ctx, 'Achados / informações relevantes', tratamentos?.achados)
+  }
+  if (show01F) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Histórico pregresso resumido')
+    drawOptionalBullets(ctx, 'Condições', pregressoItems)
+    drawOptionalField(ctx, 'Observações', pregresso?.observacoes)
+  }
+
+  // —— 02 Sintomas ——
+  const sintomas = ficha.sintomas
+  const marks = sintomas?.mapa?.marks ?? []
+  const markLines = marks
+    .map((mark) => {
+      const region = FOCUS_REGIONS.find((r) => r.key === mark.regionKey)
+      if (!region) return null
+      const glyph = mark.symbol ? BODY_MAP_GLYPH[mark.symbol] ?? mark.symbol : ''
+      return glyph ? `${region.label} (${glyph})` : region.label
+    })
+    .filter((line): line is string => Boolean(line))
+
+  const caracteristicaItems = checkedLabels(
+    sintomas?.caracteristica as Record<string, unknown> | undefined,
+    {
+      dor: 'Dor',
+      rigidez: 'Rigidez',
+      fraqueza: 'Fraqueza',
+      parestesia: 'Parestesia',
+      dormencia: 'Dormência',
+      instabilidade: 'Instabilidade',
+      travamento: 'Travamento',
+      estalo: 'Estalo',
+      edema: 'Edema',
+      outro: 'Outro',
+    },
+  )
+  const hasIntensidade =
+    sintomas?.intensidade?.agora !== undefined ||
+    sintomas?.intensidade?.melhor !== undefined ||
+    sintomas?.intensidade?.pior !== undefined
+
+  const periodoMap = { melhor: 'Melhor', igual: 'Igual', pior: 'Pior' }
+  const has24h =
+    Boolean(sintomas?.comportamento24h?.manha) ||
+    Boolean(sintomas?.comportamento24h?.dia) ||
+    Boolean(sintomas?.comportamento24h?.noite) ||
+    Boolean(sintomas?.comportamento24h?.interfereSono) ||
+    Boolean(sintomas?.comportamento24h?.acordaPorSintomas)
+
+  const pioraItems = checkedLabels(sintomas?.piora as Record<string, unknown> | undefined, {
+    caminhar: 'Caminhar',
+    agachar: 'Agachar',
+    deitar: 'Deitar',
+    carregarPeso: 'Carregar peso',
+    correr: 'Correr',
+    sentar: 'Sentar',
+    movimentoEspecifico: 'Movimento específico',
+    trabalho: 'Trabalho',
+    escadas: 'Escadas',
+    permanecerEmPe: 'Permanecer em pé',
+    esporte: 'Esporte',
+    outro: 'Outro',
+  })
+  const hasPiora = pioraItems.length > 0 || textFilled(sintomas?.piora?.detalhe)
+
+  const melhoraItems = checkedLabels(sintomas?.melhora as Record<string, unknown> | undefined, {
+    repouso: 'Repouso',
+    calor: 'Calor',
+    exercicio: 'Exercício',
+    movimento: 'Movimento',
+    frio: 'Frio',
+    mudancaPosicao: 'Mudança de posição',
+    medicamento: 'Medicamento',
+    outro: 'Outro',
+  })
+  const hasMelhora = melhoraItems.length > 0 || textFilled(sintomas?.melhora?.detalhe)
+
+  const hasIrrit =
+    Boolean(sintomas?.irritabilidade?.esforcoProvocar) ||
+    Boolean(sintomas?.irritabilidade?.tempoVoltar)
+
+  const show02A = markLines.length > 0 && isFieldSelected(selected, '02.A')
+  const show02B = caracteristicaItems.length > 0 && isFieldSelected(selected, '02.B')
+  const show02C = hasIntensidade && isFieldSelected(selected, '02.C')
+  const show02D = has24h && isFieldSelected(selected, '02.D')
+  const show02E = hasPiora && isFieldSelected(selected, '02.E')
+  const show02F = hasMelhora && isFieldSelected(selected, '02.F')
+  const show02G = hasIrrit && isFieldSelected(selected, '02.G')
+
+  // Mapa de sintomas (desenho): bloco A dos sintomas desde o checklist 6.5; o id '05.A' fica pela compatibilidade.
+  const tracosMapa = safeBodyStrokes(ficha.mapaSintomas?.tracos)
+  const obsMapa = ficha.mapaSintomas?.observacao
+  if ((tracosMapa.length > 0 || textFilled(obsMapa)) && isFieldSelected(selected, '05.A')) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Mapa de sintomas')
+    drawMapaSintomas(
+      ctx,
+      tracosMapa,
+      bodyDrawingViewBox(bodyDrawingVersion(ficha.mapaSintomas?.versao, tracosMapa)),
+      obsMapa,
+      ficha.mapaSintomas?.personalizada,
+    )
+  }
+
+  if (show02A) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Regiões marcadas')
+    drawBodyMap(ctx, marks)
+  }
+  if (show02B) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Característica predominante')
+    drawOptionalBullets(ctx, 'Característica', caracteristicaItems)
+  }
+  if (show02C) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Intensidade (0-10)')
+    drawEvaScale(ctx, {
+      agora: sintomas?.intensidade?.agora,
+      melhor: sintomas?.intensidade?.melhor,
+      pior: sintomas?.intensidade?.pior,
+    })
+    drawOptionalField(ctx, 'Agora', sintomas?.intensidade?.agora)
+    drawOptionalField(ctx, 'Melhor', sintomas?.intensidade?.melhor)
+    drawOptionalField(ctx, 'Pior', sintomas?.intensidade?.pior)
+  }
+  if (show02D) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Comportamento em 24 horas')
+    drawOptionalField(ctx, 'Manhã', enumLabel(sintomas?.comportamento24h?.manha, periodoMap))
+    drawOptionalField(ctx, 'Dia', enumLabel(sintomas?.comportamento24h?.dia, periodoMap))
+    drawOptionalField(ctx, 'Noite', enumLabel(sintomas?.comportamento24h?.noite, periodoMap))
+    drawOptionalField(
+      ctx,
+      'Interfere no sono',
+      enumLabel(sintomas?.comportamento24h?.interfereSono, { nao: 'Não', sim: 'Sim' }),
+    )
+    drawOptionalField(
+      ctx,
+      'Acorda por sintomas',
+      enumLabel(sintomas?.comportamento24h?.acordaPorSintomas, { nao: 'Não', sim: 'Sim' }),
+    )
+  }
+  if (show02E) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'O que piora')
+    drawOptionalBullets(ctx, 'Fatores', pioraItems)
+    drawOptionalField(ctx, 'Detalhe', sintomas?.piora?.detalhe)
+  }
+  if (show02F) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'O que melhora')
+    drawOptionalBullets(ctx, 'Fatores', melhoraItems)
+    drawOptionalField(ctx, 'Detalhe', sintomas?.melhora?.detalhe)
+  }
+  if (show02G) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Irritabilidade / resposta')
+    drawOptionalField(
+      ctx,
+      'Esforço para provocar',
+      enumLabel(sintomas?.irritabilidade?.esforcoProvocar, {
+        pouco: 'Pouco',
+        moderado: 'Moderado',
+        muito: 'Muito',
+        variavel: 'Variável',
+      }),
+    )
+    drawOptionalField(
+      ctx,
+      'Tempo para voltar',
+      enumLabel(sintomas?.irritabilidade?.tempoVoltar, {
+        minutos: 'Minutos',
+        horas: 'Horas',
+        ateDiaSeguinte: 'Até o dia seguinte',
+        maisDe24h: 'Mais de 24 h',
+        variavel: 'Variável',
+      }),
+    )
+  }
+
+  // —— 03 Função ——
+  const funcao = ficha.funcao
+  const hasLimit =
+    textFilled(funcao?.limitacaoFuncional?.item1) ||
+    textFilled(funcao?.limitacaoFuncional?.item2) ||
+    textFilled(funcao?.limitacaoFuncional?.item3)
+
+  const atividadesBloco = funcao?.atividadesAfetadas
+  const hasAtividades =
+    ATIVIDADES.some((item) => {
+      const marcada = atividadesBloco?.[item.key] === true
+      const capacidade = atividadesBloco?.capacidades?.[item.key]
+      return marcada || Boolean(formatMiolo(capacidade?.atual, capacidade?.antes))
+    }) ||
+    textFilled(atividadesBloco?.outraDetalhe) ||
+    textFilled(atividadesBloco?.textoLegado)
+
+  const trabalhoItems = checkedLabels(
+    funcao?.rotina?.trabalho as Record<string, unknown> | undefined,
+    {
+      sentado: 'Sentado',
+      emPe: 'Em pé',
+      manual: 'Manual',
+      repetitivo: 'Repetitivo',
+      cargaElevada: 'Carga elevada',
+      variavel: 'Variável',
+    },
+  )
+  const hasRotina =
+    trabalhoItems.length > 0 ||
+    textFilled(funcao?.rotina?.horasDia)
+
+  const objetivoItems = checkedLabels(
+    funcao?.expectativas?.objetivos as Record<string, unknown> | undefined,
+    {
+      reduzirSintomas: 'Reduzir sintomas',
+      recuperarMovimento: 'Recuperar movimento',
+      recuperarForca: 'Recuperar força',
+      voltarTrabalho: 'Voltar ao trabalho',
+      voltarEsporte: 'Voltar ao esporte',
+      recuperarIndependencia: 'Recuperar independência',
+      dormirMelhor: 'Dormir melhor',
+      outro: 'Outro',
+    },
+  )
+  const hasExpect =
+    textFilled(funcao?.expectativas?.boaMelhora) || objetivoItems.length > 0
+
+  const redFlagItems = checkedLabels(
+    funcao?.triagemSeguranca as Record<string, unknown> | undefined,
+    {
+      traumaRecente: 'Trauma recente',
+      febreMalEstar: 'Febre / mal-estar',
+      perdaPeso: 'Perda de peso',
+      historicoCancer: 'Histórico de câncer',
+      deficitNeuro: 'Déficit neurológico',
+      alteracaoBexigaIntestino: 'Alteração bexiga/intestino',
+      alteracaoSensitivaPerineal: 'Alteração sensitiva perineal',
+      dorToracica: 'Dor torácica',
+      dispneia: 'Dispneia',
+      sinaisPosOp: 'Sinais pós-operatórios',
+      outroAchado: 'Outro achado',
+    },
+  )
+  const condutaItems = checkedLabels(
+    funcao?.triagemSeguranca?.conduta as Record<string, unknown> | undefined,
+    {
+      avalieiDocumentei: 'Avaliei e documentei',
+      precisoInvestigar: 'Preciso investigar',
+      encaminhamento: 'Encaminhamento',
+      urgencia: 'Urgência',
+      naoSeAplica: 'Não se aplica',
+    },
+  )
+  const hasTriagem =
+    redFlagItems.length > 0 ||
+    condutaItems.length > 0 ||
+    textFilled(funcao?.triagemSeguranca?.observacoes)
+
+  const hasMeds =
+    textFilled(funcao?.medicacoes?.medicamentos) ||
+    textFilled(funcao?.medicacoes?.alergias) ||
+    textFilled(funcao?.medicacoes?.outrasInfo)
+
+  const show03A = hasLimit && isFieldSelected(selected, '03.A')
+  const show03B = hasAtividades && isFieldSelected(selected, '03.B')
+  const show03C = hasRotina && isFieldSelected(selected, '03.C')
+  const show03D = hasExpect && isFieldSelected(selected, '03.D')
+  const show03E = hasTriagem && isFieldSelected(selected, '03.E')
+  const show03F = hasMeds && isFieldSelected(selected, '03.F')
+
+  if (show03A) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Principal limitação funcional')
+    drawOptionalField(ctx, 'Item 1', funcao?.limitacaoFuncional?.item1)
+    drawOptionalField(ctx, 'Item 2', funcao?.limitacaoFuncional?.item2)
+    drawOptionalField(ctx, 'Item 3', funcao?.limitacaoFuncional?.item3)
+  }
+  if (show03B) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Atividades afetadas')
+    const marcadas: string[] = []
+    for (const item of ATIVIDADES) {
+      const marcada = atividadesBloco?.[item.key] === true
+      const capacidade = atividadesBloco?.capacidades?.[item.key]
+      const miolo = formatMiolo(capacidade?.atual, capacidade?.antes)
+      if (!marcada && !miolo) continue
+      if (miolo) {
+        drawOptionalField(ctx, item.label, miolo)
+      } else {
+        marcadas.push(item.label)
+      }
+    }
+    drawOptionalBullets(ctx, 'Atividades', marcadas)
+    drawOptionalField(ctx, 'Registro anterior', atividadesBloco?.textoLegado)
+  }
+  if (show03C) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Rotina e demanda')
+    drawOptionalBullets(ctx, 'Trabalho', trabalhoItems)
+    drawOptionalField(ctx, 'Horas/dia', funcao?.rotina?.horasDia)
+  }
+  if (show03D) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Expectativas e objetivos')
+    drawOptionalField(ctx, 'Boa melhora', funcao?.expectativas?.boaMelhora)
+    drawOptionalBullets(ctx, 'Objetivos principais', objetivoItems)
+  }
+  if (show03E) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Triagem de segurança')
+    drawOptionalBullets(ctx, 'Sinais de alerta', redFlagItems)
+    drawOptionalBullets(ctx, 'Conduta', condutaItems)
+    drawOptionalField(ctx, 'Observações', funcao?.triagemSeguranca?.observacoes)
+  }
+  if (show03F) {
+    anyContent = true
+    drawClearSectionTitle(ctx, 'Medicações / outras informações')
+    drawOptionalField(ctx, 'Medicamentos', funcao?.medicacoes?.medicamentos)
+    drawOptionalField(ctx, 'Alergias', funcao?.medicacoes?.alergias)
+    drawOptionalField(ctx, 'Outras informações', funcao?.medicacoes?.outrasInfo)
+  }
+  if (drawPlanoClinico(ctx, ficha, selected)) anyContent = true
+
+  if (!anyContent) {
+    drawParagraph(ctx, 'Avaliação sem campos preenchidos na ficha.', { color: COLORS.muted })
+  }
+}
+
+const EVO_SOAP_FIELDS: Array<{
+  key:
+    | 'patientState'
+    | 'changesSinceLast'
+    | 'conducts'
+    | 'treatmentResponse'
+    | 'sideEffects'
+    | 'incidents'
+    | 'nextPlan'
+  idSuffix: string
+  label: string
+  /** SOAP letter for lettered ficha chrome (D-05). */
+  soapLetter: 'S' | 'O' | 'A' | 'P'
+  soapTitle: string
+}> = [
+  {
+    key: 'patientState',
+    idSuffix: 'patientState',
+    label: 'Estado do paciente',
+    soapLetter: 'S',
+    soapTitle: 'Subjetivo',
+  },
+  {
+    key: 'changesSinceLast',
+    idSuffix: 'changesSinceLast',
+    label: 'Mudanças desde a última',
+    soapLetter: 'S',
+    soapTitle: 'Subjetivo',
+  },
+  {
+    key: 'treatmentResponse',
+    idSuffix: 'treatmentResponse',
+    label: 'Resposta ao tratamento',
+    soapLetter: 'O',
+    soapTitle: 'Objetivo',
+  },
+  {
+    key: 'sideEffects',
+    idSuffix: 'sideEffects',
+    label: 'Efeitos colaterais',
+    soapLetter: 'O',
+    soapTitle: 'Objetivo',
+  },
+  {
+    key: 'incidents',
+    idSuffix: 'incidents',
+    label: 'Intercorrências',
+    soapLetter: 'O',
+    soapTitle: 'Objetivo',
+  },
+  {
+    key: 'conducts',
+    idSuffix: 'conducts',
+    label: 'Condutas',
+    soapLetter: 'A',
+    soapTitle: 'Avaliação',
+  },
+  {
+    key: 'nextPlan',
+    idSuffix: 'nextPlan',
+    label: 'Plano seguinte',
+    soapLetter: 'P',
+    soapTitle: 'Plano',
+  },
+]
+
+const EVO_SOAP_LETTER_ORDER: Array<'S' | 'O' | 'A' | 'P'> = ['S', 'O', 'A', 'P']
+
+/**
+ * Multi-session evolução PDF (D-04/D-05): SOAP leaves + AI sections when selected ∩ filled.
+ * Never invents clinical or AI text — empty/unselected omitted (REQ-25.6 / REQ-26.6).
+ */
+function drawEvolucao(ctx: DrawContext, input: PatientAiEvolucaoPdfInput) {
+  ctx.footerKind = 'ficha'
+  drawOptionalField(ctx, 'Sessões', input.sessionLabel)
+
+  const selected = input.selectedFieldIds
+  let anyContent = false
+
+  for (const session of input.sessions) {
+    const evo = session.evolution
+    if (!evo) continue
+
+    const fields = EVO_SOAP_FIELDS.filter((field) => {
+      const value = evo[field.key]
+      if (!textFilled(value)) return false
+      const id = `evo.session.${session.id}.${field.idSuffix}`
+      return isFieldSelected(selected, id)
+    })
+
+    if (fields.length === 0) continue
+
+    anyContent = true
+    const when =
+      [session.dateLabel, session.timeLabel].filter(Boolean).join(' · ') || session.dateLabel
+    if (when.trim()) drawClearSectionTitle(ctx, when)
+
+    for (const letter of EVO_SOAP_LETTER_ORDER) {
+      const group = fields.filter((f) => f.soapLetter === letter)
+      if (group.length === 0) continue
+      drawClearSectionTitle(ctx, group[0]!.soapTitle)
+      for (const field of group) {
+        drawOptionalField(ctx, field.label, evo[field.key])
+      }
+    }
+  }
+
+  const aiBlocks: Array<{
+    id: PdfFieldId
+    letter: string
+    title: string
+    value: string | undefined
+    caution?: boolean
+  }> = [
+    { id: 'evo.ai.sintese', letter: 'A', title: 'Síntese clínica', value: input.synthesis.sintese },
+    { id: 'evo.ai.tendencias', letter: 'B', title: 'Tendências', value: input.synthesis.tendencias },
+    {
+      id: 'evo.ai.condutasAgregadas',
+      letter: 'C',
+      title: 'Condutas agregadas',
+      value: input.synthesis.condutasAgregadas,
+    },
+    {
+      id: 'evo.ai.alertas',
+      letter: 'D',
+      title: 'Alertas',
+      value: input.synthesis.alertas,
+      caution: true,
+    },
+  ]
+
+  const aiToDraw = aiBlocks.filter(
+    (block) => textFilled(block.value) && isFieldSelected(selected, block.id),
+  )
+
+  if (aiToDraw.length > 0) {
+    anyContent = true
+    for (const block of aiToDraw) {
+      drawClearSectionTitle(ctx, block.title)
+      drawClearValue(ctx, block.value)
+    }
+  }
+
+  if (!anyContent) {
+    drawParagraph(ctx, 'Nenhum campo selecionado para exportar.', { color: COLORS.muted })
+  }
+}
+
+function docTitleFor(input: BuildPatientAiReportPdfInput): string {
+  if (input.kind === 'geral') return 'Avaliação geral'
+  if (input.kind === 'sessao') return 'Avaliação por sessão'
+  if (input.kind === 'evolucao') return 'Evolução clínica'
+  const named = input.evaluationTitle?.trim()
+  return named || 'Avaliação musculoesquelética'
+}
+
+/**
+ * Builds deterministic PDF bytes for kind geral | sessao | avaliacao | evolucao (D-05, D-07).
+ * Brand layout: FLUXO logo + accent/forest palette — no Gemini.
+ */
+export async function buildPatientAiReportPdf(input: BuildPatientAiReportPdfInput): Promise<Blob> {
+  const doc = await PDFDocument.create()
+  const marca = await loadPdfBrand(doc)
+  COLORS = marca.colors ? { ...COLORS_PADRAO, ...marca.colors } : COLORS_PADRAO
+  try {
+    return await montarPdf(doc, input, marca)
+  } finally {
+    COLORS = COLORS_PADRAO
+  }
+}
+
+async function montarPdf(
+  doc: PDFDocument,
+  input: BuildPatientAiReportPdfInput,
+  marca: PdfBrandAssets,
+): Promise<Blob> {
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold)
+  const timesBold = await doc.embedFont(StandardFonts.TimesRomanBold)
+
+  // Logo da conta; sem ela e sem nome, a logo do Fluxo.
+  let logo: PDFImage | null = marca.logo
+  if (!logo && !marca.name) {
+    const logoBytes = await fetch(logoUrl).then((r) => {
+      if (!r.ok) throw new Error('Não foi possível carregar a logo FLUXO.')
+      return r.arrayBuffer()
+    })
+    logo = await doc.embedPng(logoBytes)
+  }
+
+  // Figura do mapa de sintomas: só busca e embute quando a avaliação tem traços.
+  let bodyImage: PDFImage | undefined
+  if (input.kind === 'avaliacao' && safeBodyStrokes(input.ficha.mapaSintomas?.tracos).length > 0) {
+    const mapa = input.ficha.mapaSintomas
+    const feminina = bodyDrawingFigure(mapa?.figura) === 'feminina'
+    const fundoUrl =
+      bodyDrawingVersion(mapa?.versao, safeBodyStrokes(mapa?.tracos)) === 2
+        ? feminina
+          ? corpoFemininoUrl
+          : corpoMasculinoUrl
+        : feminina
+          ? pessoaFemininaUrl
+          : pessoaUrl
+    const bodyBytes = await fetch(fundoUrl).then((r) => {
+      if (!r.ok) throw new Error('Não foi possível carregar a figura do mapa de sintomas.')
+      return r.arrayBuffer()
+    })
+    bodyImage = await doc.embedPng(bodyBytes)
+  }
+
+  const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT])
+  const generatedAt = formatGeneratedAt()
+  const docTitle = docTitleFor(input)
+  const patientLine = input.name
+
+  const ctx: DrawContext = {
+    doc,
+    page,
+    font,
+    bold,
+    timesBold,
+    logo,
+    brandName: marca.name,
+    logoSize: marca.logoSize,
+    logoAlign: marca.logoAlign,
+    y: PAGE_HEIGHT,
+    pageIndex: 1,
+    docTitle,
+    patientLine,
+    generatedAt,
+    contentX: MARGIN_X,
+    contentW: CONTENT_WIDTH,
+    footerKind: input.kind === 'avaliacao' || input.kind === 'evolucao' ? 'ficha' : 'fluxo',
+    fichaDate:
+      input.kind === 'avaliacao'
+        ? input.performedOnLabel.trim() || undefined
+        : input.kind === 'evolucao'
+          ? generatedAt
+          : undefined,
+    fichaTherapist:
+      input.kind === 'avaliacao' ? input.therapistName?.trim() || undefined : undefined,
+    bodyImage,
+  }
+
+  drawHeaderBand(ctx, { isFirstPage: true })
+
+  if (input.kind === 'geral') {
+    drawGeral(ctx, input)
+  } else if (input.kind === 'sessao') {
+    drawSessao(ctx, input)
+  } else if (input.kind === 'evolucao') {
+    ctx.footerKind = 'ficha'
+    drawEvolucao(ctx, input)
+  } else {
+    drawAvaliacao(ctx, input)
+  }
+
+  drawFooter(ctx)
+
+  const bytes = await doc.save()
+  return new Blob([Uint8Array.from(bytes)], { type: 'application/pdf' })
+}
